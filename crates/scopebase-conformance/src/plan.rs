@@ -108,6 +108,14 @@ pub fn plan(
                         mismatched.push(MANIFEST_FILE.into());
                     }
                     Ok(doc) => {
+                        // S197: attribute manifest-schema failures to
+                        // the manifest itself, using the same gates
+                        // verification enforces. Valid pins with a bad
+                        // schema tag or notices section otherwise yield
+                        // empty buckets for a failed closure.
+                        if closure::check_manifest_doc(fixture_root, &doc).is_err() {
+                            mismatched.push(MANIFEST_FILE.into());
+                        }
                         for entry in doc
                             .get("files")
                             .and_then(|f| f.as_array())

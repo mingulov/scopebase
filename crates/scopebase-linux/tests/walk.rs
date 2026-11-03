@@ -1089,3 +1089,59 @@ fn fd_exhaustion_parent_spawns_child() {
         .expect("spawn child");
     assert!(status.success(), "child proved EMFILE behavior: {status}");
 }
+
+// S206: walk diagnostics omit paths and stay bounded like every other
+// identity/payload type. Canary names reach entries via `path()` but
+// must never appear in any `Debug` format, and each format stays short
+// printable ASCII (mirrors the held.rs diagnostic-bound test).
+#[test]
+fn walk_debug_omits_paths_and_stays_bounded() {
+    let tree = Fixture::fresh("canary");
+    for name in ["CANARY-one", "CANARY-two", "CANARY-three"] {
+        std::fs::write(tree.path().join(name), b"payload").expect("canary file");
+    }
+    let root = open_stay(&tree);
+    let epoch = WalkEpoch::new();
+    let mut one = generous();
+    one.max_entries_visited = 1;
+    let mut b = budget(one, one, &epoch);
+    let mut seen = Vec::new();
+    let failure = expect_failure_collect(
+        &root,
+        &mut b,
+        &OperationControl::unlimited(),
+        &mut seen,
+    );
+    seen.extend(failure.partial().iter().cloned());
+    assert!(
+        seen.iter()
+            .any(|e| e.path().to_string_lossy().contains("CANARY")),
+        "canary reaches entries via path()"
+    );
+    // A successful batch over the same canary tree.
+    let root2 = open_stay(&tree);
+    let epoch2 = WalkEpoch::new();
+    let mut b2 = budget(generous(), generous(), &epoch2);
+    let batch = walk(&root2, &mut b2, &OperationControl::unlimited()).expect("batch succeeds");
+    assert!(!batch.entries().is_empty(), "batch carries entries");
+    let mut texts = Vec::new();
+    for entry in &seen {
+        texts.push(format!("{entry:?}"));
+        texts.push(format!("{entry:#?}"));
+    }
+    for entry in batch.entries() {
+        texts.push(format!("{entry:?}"));
+    }
+    texts.push(format!("{batch:?}"));
+    texts.push(format!("{batch:#?}"));
+    texts.push(format!("{failure:?}"));
+    texts.push(format!("{failure:#?}"));
+    for text in &texts {
+        assert!(text.len() <= 256, "diagnostic bounded: {text:?}");
+        assert!(
+            text.bytes().all(|b| (0x20..=0x7e).contains(&b)),
+            "diagnostic printable: {text:?}"
+        );
+        assert!(!text.contains("CANARY"), "diagnostic omits paths: {text:?}");
+    }
+}

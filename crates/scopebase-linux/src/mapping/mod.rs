@@ -1104,7 +1104,15 @@ fn parse_fdinfo_mnt_id(input: &[u8]) -> Option<u64> {
 /// Error-bearing filesystem classification: a failed fstatfs is `Unknown`,
 /// never an observation failure and never ordinary.
 fn classify_filesystem(fd: std::os::fd::BorrowedFd<'_>) -> FsClass {
-    match rustix::fs::fstatfs(fd) {
+    classify_statfs(rustix::fs::fstatfs(fd))
+}
+
+/// Pure mapping from an fstatfs outcome to a filesystem class (S209):
+/// any failure is Unknown (refuses reuse), never ordinary. Split out
+/// so tests cover the failure arm without constructing an invalid
+/// `BorrowedFd` (see `slot_flags` for the raw-probe idiom).
+fn classify_statfs(outcome: rustix::io::Result<rustix::fs::StatFs>) -> FsClass {
+    match outcome {
         Ok(fs) => FsClass::from_magic(fs.f_type as u64),
         Err(_) => FsClass::Unknown,
     }
@@ -1522,13 +1530,37 @@ mod tests {
         assert!(lookup_mount_key(&table, 999, 101192187).is_none());
     }
 
+    /// Raw F_GETFD probe on a possibly-invalid slot (mirrors
+    /// `slot_flags`): explicitly accepts invalid slots, unlike
+    /// `BorrowedFd::borrow_raw`.
+    fn raw_fd_probe(fd: i32) -> std::io::Result<i32> {
+        unsafe extern "C" {
+            fn fcntl(fd: std::ffi::c_int, cmd: std::ffi::c_int, ...) -> std::ffi::c_int;
+        }
+        let result = unsafe { fcntl(fd, 1) };
+        if result == -1 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(result)
+        }
+    }
+
     #[test]
     fn fstatfs_failure_is_unknown_never_ordinary() {
-        // An out-of-range descriptor fails fstatfs with EBADF however the
-        // test process races FD allocation: the classification is Unknown
-        // (refuses reuse), never a silent ordinary filesystem.
-        let bad = unsafe { std::os::fd::BorrowedFd::borrow_raw(i32::MAX - 1) };
-        assert_eq!(classify_filesystem(bad), FsClass::Unknown);
+        // S209: a raw probe of an out-of-range descriptor fails EBADF
+        // however the test process races FD allocation (the
+        // `slot_flags` idiom — no invalid `BorrowedFd` is ever
+        // constructed); the classifier maps any fstatfs failure to
+        // Unknown (refuses reuse), never a silent ordinary
+        // filesystem.
+        assert_eq!(
+            raw_fd_probe(i32::MAX - 1).unwrap_err().raw_os_error(),
+            Some(rustix::io::Errno::BADF.raw_os_error())
+        );
+        assert_eq!(
+            classify_statfs(Err(rustix::io::Errno::BADF)),
+            FsClass::Unknown
+        );
         // A valid descriptor classifies by its real magic.
         let file = std::fs::File::open("/proc/self/mountinfo").unwrap();
         assert_ne!(

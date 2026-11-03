@@ -487,6 +487,43 @@ fn fixture_root_create_cleans_up_after_open_failure() {
     drop_staging(&stage);
 }
 
+/// S207: post-mkdir open failures strand nothing. The fault hook
+/// forces the window `create()` closes via `open_created`: mkdir
+/// succeeds, the open refuses, and the fresh name is removed while
+/// the ORIGINAL error reports. Both `subdir()` and the intermediate
+/// path (`open_child_dir`, via a nested `subdir`) are pinned.
+#[test]
+fn subdir_cleans_up_after_open_failure() {
+    let stage = staging("txsubdir");
+    let root = FixtureRoot::create(&stage, "root").expect("root");
+    set_fail_fresh_dir_open(true);
+    let err = root.subdir("doomed").expect_err("forced open failure");
+    assert_eq!(
+        err.raw_os_error(),
+        Some(rustix::io::Errno::MFILE.raw_os_error()),
+        "original error reports: {err}"
+    );
+    assert!(
+        !stage.join("root").join("doomed").exists(),
+        "failed subdir stranded the fresh name"
+    );
+    // Nested creation faults inside `open_child_dir` (the `mid`
+    // intermediate), before `leaf` is ever attempted.
+    set_fail_fresh_dir_open(true);
+    let err = root.subdir("mid/leaf").expect_err("forced nested failure");
+    assert_eq!(
+        err.raw_os_error(),
+        Some(rustix::io::Errno::MFILE.raw_os_error()),
+        "original error reports: {err}"
+    );
+    assert!(
+        !stage.join("root").join("mid").exists(),
+        "failed nested subdir stranded the intermediate"
+    );
+    root.close().expect("root retires");
+    drop_staging(&stage);
+}
+
 /// S13-round3: a forced substitution loosened into the close window
 /// deletes nothing. The hook fires between the identity re-verify
 /// and the deletion-time exclusivity check: it swaps an empty

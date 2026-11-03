@@ -273,7 +273,12 @@ fn unreaped_exited_child_verifies_exited_without_sample() {
     match observation.verify_birth(&control()) {
         Ok(birth) => {
             assert!(matches!(birth.status(), BirthStatus::Exited));
-            assert!(birth.sampled_birth().is_none() || birth.sampled_birth().is_some());
+            // S175: reaped-before-verify is pre-poll terminal, which
+            // carries no sample (birth_check terminal pre-poll arm).
+            assert!(
+                birth.sampled_birth().is_none(),
+                "exited-before-verify carries no sample"
+            );
         }
         Err(error) => {
             assert_eq!(

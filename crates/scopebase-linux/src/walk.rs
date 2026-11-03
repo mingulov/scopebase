@@ -375,13 +375,26 @@ fn classify(mode: u32) -> WalkFileType {
 }
 
 /// One emitted entry: path relative to the root plus confirmed identity.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct WalkEntry {
     path: PathBuf,
     depth: usize,
     kind: WalkFileType,
     dev: u64,
     ino: u64,
+}
+
+// S206: `Debug` omits the path — entry identity without entry bytes,
+// so canary names never reach logs and output stays bounded. Like
+// `LinuxError`, the format is single-line in both modes.
+impl std::fmt::Debug for WalkEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "WalkEntry {{ depth: {}, kind: {:?}, dev: {}, ino: {} }}",
+            self.depth, self.kind, self.dev, self.ino
+        )
+    }
 }
 
 impl WalkEntry {
@@ -409,11 +422,24 @@ impl WalkEntry {
 
 /// One bounded batch, sorted by path bytes within the batch only.
 /// Deterministic global ordering across batches is not promised.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct WalkBatch {
     entries: Vec<WalkEntry>,
     done: bool,
     round: WalkCharges,
+}
+
+// S206: `Debug` reports counts, never entries — output length must not
+// scale with the batch. Single-line in both modes.
+impl std::fmt::Debug for WalkBatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "WalkBatch {{ entries: {}, done: {} }}",
+            self.entries.len(),
+            self.done
+        )
+    }
 }
 
 impl WalkBatch {
@@ -435,12 +461,26 @@ impl WalkBatch {
 /// the epoch the retained queue still belongs to. Queue custody stays in the
 /// budget; retry with the same budget (and, for total exhaustion, a
 /// same-epoch [`WalkBudget::raise_total`] first).
-#[derive(Debug)]
 pub struct WalkFailure {
     error: LinuxError,
     partial: Vec<WalkEntry>,
     charges: WalkCharges,
     epoch: u64,
+}
+
+// S206: `Debug` carries the typed error (itself redacted), a partial
+// count and the epoch — never partial paths or unbounded charges.
+// Single-line in both modes.
+impl std::fmt::Debug for WalkFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "WalkFailure {{ error: {:?}, partial: {}, epoch: {} }}",
+            self.error,
+            self.partial.len(),
+            self.epoch
+        )
+    }
 }
 
 impl WalkFailure {

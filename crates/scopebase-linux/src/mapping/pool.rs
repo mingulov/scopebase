@@ -585,9 +585,12 @@ fn clone_error(error: &LinuxError) -> LinuxError {
         parse_line: error.parse_line(),
         stage: error.stage(),
         reason: error.reason(),
+        // S208: an errno-less source clones to no source — never an
+        // invented `from_raw_os_error(0)` "Success".
         source: error
             .source()
-            .map(|source| std::io::Error::from_raw_os_error(source.raw_os_error().unwrap_or(0))),
+            .and_then(|source| source.raw_os_error())
+            .map(std::io::Error::from_raw_os_error),
         effect: error.effect().clone(),
         charges: error.charges().clone(),
         #[cfg(feature = "process")]
@@ -1014,6 +1017,31 @@ mod tests {
     use crate::control::{CancelToken, OperationControl};
     use crate::file::{ProcFdResolver, SymlinkPolicy};
     use std::os::fd::AsFd;
+
+    #[test]
+    fn clone_error_preserves_absent_errno() {
+        // S208: an errno-less source (e.g. `io::Error::other`) clones
+        // to no errno — never an invented `from_raw_os_error(0)`
+        // "Success". A real errno survives the round trip.
+        let mut error = pool_error(
+            Stage::ObserveMapping,
+            Reason::Unavailable,
+            CleanupDisposition::Complete,
+        );
+        error.source = Some(std::io::Error::other("sourceless"));
+        assert_eq!(error.source().unwrap().raw_os_error(), None);
+        let cloned = clone_error(&error);
+        assert_eq!(
+            cloned.source().and_then(|s| s.raw_os_error()),
+            None
+        );
+        let real = pool_error_with_source(Stage::ObserveMapping, rustix::io::Errno::NOENT);
+        let cloned = clone_error(&real);
+        assert_eq!(
+            cloned.source().and_then(|s| s.raw_os_error()),
+            Some(rustix::io::Errno::NOENT.raw_os_error())
+        );
+    }
 
     fn test_pool(max_mappings: usize, max_bytes: usize) -> MappingPool {
         MappingPool::new(MappingPoolLimits {

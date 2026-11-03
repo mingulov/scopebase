@@ -277,6 +277,12 @@ impl FixtureRoot {
             // a denied chmod removes the fresh dir instead of
             // leaving residue its caller never owned.
             Ok(()) => {
+                // S207: arm before the open — a post-mkdir open
+                // failure removes the fresh name instead of
+                // stranding it.
+                let mut rollback = UnlinkArmed::armed(dir.as_fd(), &name);
+                #[cfg(test)]
+                fresh_dir_open_fault()?;
                 let fresh = rfs::openat(
                     dir.as_fd(),
                     &name,
@@ -284,14 +290,11 @@ impl FixtureRoot {
                     Mode::empty(),
                 )
                 .map_err(io::Error::from)?;
-                {
-                    let mut rollback = UnlinkArmed::armed(dir.as_fd(), &name);
-                    fchmod_created(
-                        &mut rollback,
-                        fresh.as_fd(),
-                        Mode::from_bits_truncate(0o755),
-                    )?;
-                }
+                fchmod_created(
+                    &mut rollback,
+                    fresh.as_fd(),
+                    Mode::from_bits_truncate(0o755),
+                )?;
             }
             Err(rustix::io::Errno::EXIST) => {
                 // Present: verify it is a real directory, since
@@ -612,6 +615,33 @@ fn open_created(parent_fd: &OwnedFd, name: &CString, cleanup: AtFlags) -> io::Re
     }
 }
 
+/// S207: test-only fault between fresh-dir mkdir and open — forces
+/// the post-mkdir open failure deterministically (production reaches
+/// it only on a mid-call mode change or a resource fault, like
+/// `open_created`'s cleanup branch). Thread-local take semantics:
+/// arming fires once on the arming thread only, so parallel tests
+/// can neither steal nor inherit the fault.
+#[cfg(test)]
+thread_local! {
+    static FAIL_FRESH_DIR_OPEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// S207: arm (or clear, with `false`) the fresh-dir open fault.
+#[cfg(test)]
+fn set_fail_fresh_dir_open(fail: bool) {
+    FAIL_FRESH_DIR_OPEN.with(|armed| armed.set(fail));
+}
+
+/// S207: refuse with EMFILE when the fault is armed (once).
+#[cfg(test)]
+fn fresh_dir_open_fault() -> io::Result<()> {
+    let armed = FAIL_FRESH_DIR_OPEN.with(|flag| flag.replace(false));
+    if armed {
+        return Err(io::Error::from(rustix::io::Errno::MFILE));
+    }
+    Ok(())
+}
+
 /// S60: rollback for a just-created directory, armed at creation
 /// and disarmed once an owner holds it. Every initialization step
 /// between (open, chmod) runs under the guard, so a failed step —
@@ -708,16 +738,17 @@ fn open_child_dir(parent: BorrowedFd<'_>, name: &CString) -> io::Result<OwnedFd>
             // S60: restrictive creation mode plus chmod rollback
             // (see create).
             rfs::mkdirat(parent, name, Mode::from_bits_truncate(0o755)).map_err(io::Error::from)?;
+            // S207: arm before the open (see subdir).
+            let mut rollback = UnlinkArmed::armed(parent, name);
+            #[cfg(test)]
+            fresh_dir_open_fault()?;
             let fresh = rfs::openat(parent, name, flags, Mode::empty()).map_err(io::Error::from)?;
             // S14: fresh intermediate dirs are 0755 (see create).
-            {
-                let mut rollback = UnlinkArmed::armed(parent, name);
-                fchmod_created(
-                    &mut rollback,
-                    fresh.as_fd(),
-                    Mode::from_bits_truncate(0o755),
-                )?;
-            }
+            fchmod_created(
+                &mut rollback,
+                fresh.as_fd(),
+                Mode::from_bits_truncate(0o755),
+            )?;
             Ok(fresh)
         }
         Err(errno) => Err(io::Error::from(errno)),

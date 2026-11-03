@@ -40,7 +40,83 @@ impl Fixture {
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap();
+        // S211: never panic in drop — a removal failure during
+        // assertion unwinding must not abort the test process.
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+// Z4: probe the REAL capability behind the wedge instead of
+// branching on uid — uid 0 without DAC override must take the
+// stands-wedged branch. Mirrors the test's gated op (removing a
+// 0555 dir holding a file) on a scratch twin.
+fn probe_can_remove_readonly_wedge() -> bool {
+    use std::sync::atomic::Ordering;
+    let p = std::env::temp_dir().join(format!(
+        "held-file-probe-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir(&p).unwrap();
+    fs::write(p.join("payload.bin"), b"x").unwrap();
+    std::fs::set_permissions(
+        &p,
+        std::os::unix::fs::PermissionsExt::from_mode(0o555),
+    )
+    .unwrap();
+    let removed = fs::remove_dir_all(&p).is_ok() && !p.exists();
+    if p.exists() {
+        std::fs::set_permissions(
+            &p,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        fs::remove_dir_all(&p).unwrap();
+    }
+    removed
+}
+
+// S211: guard drops must not panic — a removal failure during
+// assertion unwinding must not turn a reportable failure into a
+// process abort (matches the sibling `let _ = ...` guards).
+#[test]
+fn fixture_drop_tolerates_unremovable_scratch() {
+    use std::sync::Mutex;
+    let leaked = Mutex::new(None);
+    let outcome = std::panic::catch_unwind(|| {
+        let fixture = Fixture::new();
+        fixture.write("payload.bin", b"0123456789");
+        // Deny removal: a read-only dir refuses entry unlinking.
+        std::fs::set_permissions(
+            &fixture.0,
+            std::os::unix::fs::PermissionsExt::from_mode(0o555),
+        )
+        .unwrap();
+        *leaked.lock().unwrap() = Some(fixture.0.clone());
+        panic!("forced S211 unwind");
+    });
+    assert!(outcome.is_err(), "original failure still reports");
+    // Z4: the expected branch comes from a capability probe, not
+    // the uid. An override run retires the wedge during unwinding
+    // (Drop still must not panic); a restricted run leaves it
+    // standing for manual restore. A behavior/probe mismatch fails
+    // loudly either way.
+    let override_present = probe_can_remove_readonly_wedge();
+    let saved = leaked.lock().unwrap().clone();
+    if let Some(path) = saved {
+        match (override_present, path.exists()) {
+            (true, false) => {}
+            (false, true) => {
+                std::fs::set_permissions(
+                    &path,
+                    std::os::unix::fs::PermissionsExt::from_mode(0o755),
+                )
+                .unwrap();
+                std::fs::remove_dir_all(&path).unwrap();
+            }
+            (true, true) => panic!("wedge stands despite override capability"),
+            (false, false) => panic!("wedge removed without override capability"),
+        }
     }
 }
 fn read_held(held: &HeldFile) -> Vec<u8> {

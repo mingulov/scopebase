@@ -236,15 +236,23 @@ impl DeliveryAdapter {
 /// F10: a ledger file id becomes one path segment under the staging dir,
 /// so it must be exactly one normal component (no separators, no parent
 /// or self references, no backslash even where the platform would treat
-/// it as a plain character).
+/// it as a plain character). S196(A): `Path` ignores a trailing slash,
+/// so the staged `{id}.json` name is gated too — `evil/` would otherwise
+/// stage `evil/.json` into a missing staging subdir (post-commit ENOENT).
 fn admit_ledger_file_id(file_id: &str) -> Result<(), OperatorError> {
     use std::path::Component;
-    let mut components = std::path::Path::new(file_id).components();
-    let single_normal = matches!(
-        (components.next(), components.next()),
-        (Some(Component::Normal(_)), None)
-    );
-    if file_id.is_empty() || file_id.contains('\\') || !single_normal {
+    fn single_normal(path: &str) -> bool {
+        let mut components = std::path::Path::new(path).components();
+        matches!(
+            (components.next(), components.next()),
+            (Some(Component::Normal(_)), None)
+        )
+    }
+    if file_id.is_empty()
+        || file_id.contains('\\')
+        || !single_normal(file_id)
+        || !single_normal(&format!("{file_id}.json"))
+    {
         return Err(OperatorError::new(
             OperatorErrorKind::BrokenPackage,
             format!("ledger file id escapes staging: {file_id:?}"),
@@ -818,6 +826,16 @@ fn preflight_run_inputs(
                 format!("ledger file id is not a file name: {file_id:?}"),
             )
         })?;
+        // S196(B): staged ledgers share the staging dir with the bound
+        // contract and bundle manifests — ids colliding with those
+        // names would EEXIST post-commit instead of refusing here.
+        if staged_name.as_c_str() == c"contract.json" || staged_name.as_c_str() == c"bundle.json"
+        {
+            return Err(OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                format!("ledger file id collides with a staged manifest: {file_id:?}"),
+            ));
+        }
         generated.insert(
             file_id.clone(),
             (bytes.len() as u64, Digest256::of_bytes(&bytes).as_str()),
@@ -875,6 +893,22 @@ fn preflight_run_inputs(
     let manifest_bytes = serde_json::to_vec(&manifest_value).unwrap();
     let bundle_manifest = VectorManifest::load(&bound, &manifest_bytes, bound.limits().clone())
         .map_err(|e| engine_error(format!("bundle manifest rejected: {e}")))?;
+
+    // S196(C): every bundle file must resolve pre-commit — staged from a
+    // template above or a closure vector path — mirroring the staging
+    // vector-open loop below. A fixture-ledger artifact with no template
+    // entry would otherwise die post-commit with `Engine`.
+    let vector_paths: std::collections::BTreeMap<String, std::path::PathBuf> =
+        closure.vector_paths().into_iter().collect();
+    for file in bundle_manifest.files() {
+        let id = file.file_id().as_str();
+        if !generated.contains_key(id) && !vector_paths.contains_key(id) {
+            return Err(OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                format!("bundle file has no staged ledger or closure vector: {id}"),
+            ));
+        }
+    }
 
     // S58: the assembled inputs stay retained together (rendered
     // ledgers plus contract and manifest bytes) — the total holds
@@ -1749,6 +1783,28 @@ fn acquire_output_dir(
         rustix::fs::Mode::empty(),
     ) {
         Ok(fd) => fd,
+        // Y3: owner-read masked (e.g. umask 0400 → mode 0300) denies
+        // the optimistic read-open, and no safe repair exists:
+        // `fchmod` on an O_PATH pin is EBADF, a reopen needs the
+        // missing read bit, and a by-name `chmodat` races a
+        // same-uid symlink swap onto a foreign target (S69 — the
+        // X4 repair leg's window, proven by replicating its
+        // pin→swap→chmodat sequence). Roll back ("nothing
+        // happened", name retriable) and name the umask instead of
+        // securing through a substitution window.
+        Err(e) if e == rustix::io::Errno::ACCESS => {
+            return Err(rollback_fresh_mkdir(
+                &parent_fd,
+                &name_c,
+                raw,
+                OperatorError::new(
+                    OperatorErrorKind::Engine,
+                    format!(
+                        "fresh output dir not openable (mode denies owner-read; check umask): {e}"
+                    ),
+                ),
+            ));
+        }
         Err(e) => {
             return Err(rollback_fresh_mkdir(
                 &parent_fd,
@@ -1780,7 +1836,10 @@ fn acquire_output_dir(
             ));
         }
     };
-    if st.st_uid != rustix::process::getuid().as_raw() || st.st_mode & 0o777 != 0o700 {
+    // S199: ownership compares against the EFFECTIVE uid — what the
+    // kernel stamps on our mkdir — matching cleanup's gate. `getuid`
+    // refuses every run under setuid (uid != euid).
+    if st.st_uid != rustix::process::geteuid().as_raw() {
         return Err(rollback_fresh_mkdir(
             &parent_fd,
             &name_c,
@@ -1790,6 +1849,47 @@ fn acquire_output_dir(
                 "fresh output dir ownership mismatch",
             ),
         ));
+    }
+    // S199: mode damage from an exotic umask repairs like the parent
+    // leaf. The parent proved exclusive above, so no foreign swapper
+    // can be inside this window: the fd addresses our own mkdir and
+    // securing it cannot chmod a stranger.
+    if st.st_mode & 0o777 != 0o700 {
+        if let Err(e) =
+            rustix::fs::fchmod(&fd, rustix::fs::Mode::from_bits_truncate(0o700))
+        {
+            return Err(rollback_fresh_mkdir(
+                &parent_fd,
+                &name_c,
+                raw,
+                OperatorError::new(
+                    OperatorErrorKind::Engine,
+                    format!("cannot secure fresh output dir: {e}"),
+                ),
+            ));
+        }
+        let repaired = rustix::fs::fstat(&fd).map_err(|e| {
+            rollback_fresh_mkdir(
+                &parent_fd,
+                &name_c,
+                raw,
+                OperatorError::new(
+                    OperatorErrorKind::Engine,
+                    format!("fresh output dir not statable: {e}"),
+                ),
+            )
+        })?;
+        if repaired.st_mode & 0o777 != 0o700 {
+            return Err(rollback_fresh_mkdir(
+                &parent_fd,
+                &name_c,
+                raw,
+                OperatorError::new(
+                    OperatorErrorKind::Engine,
+                    "fresh output dir mode unrepairable",
+                ),
+            ));
+        }
     }
     let mut entries = match rustix::fs::Dir::read_from(fd.as_fd()) {
         Ok(entries) => entries,

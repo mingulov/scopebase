@@ -417,6 +417,101 @@ fn manifest_within_root(
     false
 }
 
+/// Validate the manifest document shape — schema tag, file-pin
+/// entries, notices — without reading member bytes. Shared by
+/// [`verify_closure`] and the plan fallback (S197) so both attribute
+/// the same failures. Returns the pinned files plus the notice paths.
+pub(crate) fn check_manifest_doc(
+    root: &Path,
+    doc: &serde_json::Value,
+) -> Result<(Vec<PinnedFile>, Vec<String>), OperatorError> {
+    if doc.get("schema_version") != Some(&serde_json::Value::from(1u64))
+        || doc.get("kind").and_then(|k| k.as_str()) != Some(MANIFEST_SCHEMA)
+    {
+        return Err(OperatorError::new(
+            OperatorErrorKind::BrokenPackage,
+            "closure manifest has the wrong schema",
+        ));
+    }
+    let files = doc.get("files").and_then(|f| f.as_array()).ok_or_else(|| {
+        OperatorError::new(
+            OperatorErrorKind::BrokenPackage,
+            "closure manifest lacks a files array",
+        )
+    })?;
+    let mut pinned = Vec::with_capacity(files.len());
+    for entry in files {
+        let path = entry.get("path").and_then(|p| p.as_str()).ok_or_else(|| {
+            OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                "closure entry lacks a path string",
+            )
+        })?;
+        reject_escape(root, path)?;
+        let length = entry
+            .get("length")
+            .and_then(|l| l.as_str())
+            .and_then(|l| l.parse::<u64>().ok())
+            .ok_or_else(|| {
+                OperatorError::new(
+                    OperatorErrorKind::BrokenPackage,
+                    format!("closure entry lacks a decimal length: {path}"),
+                )
+            })?;
+        let sha256 = entry
+            .get("sha256")
+            .and_then(|s| s.as_str())
+            .ok_or_else(|| {
+                OperatorError::new(
+                    OperatorErrorKind::BrokenPackage,
+                    format!("closure entry lacks a sha256: {path}"),
+                )
+            })?;
+        let file_id = entry
+            .get("file_id")
+            .and_then(|i| i.as_str())
+            .map(str::to_string);
+        pinned.push(PinnedFile {
+            path: path.to_string(),
+            file_id,
+            length,
+            sha256: sha256.to_string(),
+        });
+    }
+    let notices = doc
+        .get("notices")
+        .and_then(|n| n.as_array())
+        .ok_or_else(|| {
+            OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                "closure manifest lacks a notices array",
+            )
+        })?;
+    if notices.is_empty() {
+        return Err(OperatorError::new(
+            OperatorErrorKind::BrokenPackage,
+            "closure manifest names no H33 notices",
+        ));
+    }
+    let mut notice_paths = Vec::new();
+    for notice in notices {
+        let path = notice.as_str().ok_or_else(|| {
+            OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                "closure notice is not a path string",
+            )
+        })?;
+        if !pinned.iter().any(|f| f.path == path) {
+            return Err(OperatorError::new(
+                OperatorErrorKind::BrokenPackage,
+                format!("closure notice is not a pinned file: {path}"),
+            ));
+        }
+        notice_paths.push(path.to_string());
+    }
+    Ok((pinned, notice_paths))
+}
+
 pub fn verify_closure(root: &Path, manifest_path: &Path) -> Result<VerifiedClosure, OperatorError> {
     use std::os::fd::AsFd as _;
     // S38: the manifest itself reads through a no-follow
@@ -545,90 +640,9 @@ pub fn verify_closure(root: &Path, manifest_path: &Path) -> Result<VerifiedClosu
             format!("closure manifest is not JSON: {e}"),
         )
     })?;
-    if doc.get("schema_version") != Some(&serde_json::Value::from(1u64))
-        || doc.get("kind").and_then(|k| k.as_str()) != Some(MANIFEST_SCHEMA)
-    {
-        return Err(OperatorError::new(
-            OperatorErrorKind::BrokenPackage,
-            "closure manifest has the wrong schema",
-        ));
-    }
-    let files = doc.get("files").and_then(|f| f.as_array()).ok_or_else(|| {
-        OperatorError::new(
-            OperatorErrorKind::BrokenPackage,
-            "closure manifest lacks a files array",
-        )
-    })?;
-    let mut pinned = Vec::with_capacity(files.len());
-    for entry in files {
-        let path = entry.get("path").and_then(|p| p.as_str()).ok_or_else(|| {
-            OperatorError::new(
-                OperatorErrorKind::BrokenPackage,
-                "closure entry lacks a path string",
-            )
-        })?;
-        reject_escape(root, path)?;
-        let length = entry
-            .get("length")
-            .and_then(|l| l.as_str())
-            .and_then(|l| l.parse::<u64>().ok())
-            .ok_or_else(|| {
-                OperatorError::new(
-                    OperatorErrorKind::BrokenPackage,
-                    format!("closure entry lacks a decimal length: {path}"),
-                )
-            })?;
-        let sha256 = entry
-            .get("sha256")
-            .and_then(|s| s.as_str())
-            .ok_or_else(|| {
-                OperatorError::new(
-                    OperatorErrorKind::BrokenPackage,
-                    format!("closure entry lacks a sha256: {path}"),
-                )
-            })?;
-        let file_id = entry
-            .get("file_id")
-            .and_then(|i| i.as_str())
-            .map(str::to_string);
-        pinned.push(PinnedFile {
-            path: path.to_string(),
-            file_id,
-            length,
-            sha256: sha256.to_string(),
-        });
-    }
-    let notices = doc
-        .get("notices")
-        .and_then(|n| n.as_array())
-        .ok_or_else(|| {
-            OperatorError::new(
-                OperatorErrorKind::BrokenPackage,
-                "closure manifest lacks a notices array",
-            )
-        })?;
-    if notices.is_empty() {
-        return Err(OperatorError::new(
-            OperatorErrorKind::BrokenPackage,
-            "closure manifest names no H33 notices",
-        ));
-    }
-    let mut notice_paths = Vec::new();
-    for notice in notices {
-        let path = notice.as_str().ok_or_else(|| {
-            OperatorError::new(
-                OperatorErrorKind::BrokenPackage,
-                "closure notice is not a path string",
-            )
-        })?;
-        if !pinned.iter().any(|f| f.path == path) {
-            return Err(OperatorError::new(
-                OperatorErrorKind::BrokenPackage,
-                format!("closure notice is not a pinned file: {path}"),
-            ));
-        }
-        notice_paths.push(path.to_string());
-    }
+    // S197: document-shape gates live in `check_manifest_doc` so the
+    // plan fallback attributes the same failures verification refuses.
+    let (pinned, notice_paths) = check_manifest_doc(root, &doc)?;
     let closure = VerifiedClosure {
         root: root.to_path_buf(),
         manifest_sha256,
@@ -683,6 +697,16 @@ fn check_pin(path: &str, bytes: &[u8], pinned: &PinnedFile) -> Result<(), Operat
 }
 
 fn reject_escape(root: &Path, path: &str) -> Result<(), OperatorError> {
+    // S200: parent references refuse lexically, even in-root ones —
+    // member reads never resolve `..` (the S82 no-normalized-twin
+    // principle), so admitting `sub/../file.json` here would only die
+    // deeper with a dishonest "escapes" message.
+    if path.split('/').any(|piece| piece == "..") {
+        return Err(OperatorError::new(
+            OperatorErrorKind::BrokenPackage,
+            format!("closure path contains a parent reference: {path}"),
+        ));
+    }
     // F35: anchor a relative root (".") to the current directory first;
     // without this the normalized root is empty and every in-root file
     // is misread as an escape.
@@ -965,14 +989,17 @@ fn read_member_at(root: &Path, path: &str, max: u64) -> Result<Vec<u8>, BoundedR
     .map_err(map_open_error)?;
     // Shape already confined by `reject_escape`; empty and dot pieces
     // (from `./x` or doubled slashes) skip like the lexical
-    // normalization, while `..` refuses (unreachable past the gate).
+    // normalization. `..` is rejected at the gate; the branch below is
+    // defense in depth and never resolves a parent reference here.
     let mut run: Vec<&str> = Vec::new();
     for piece in path.split('/') {
         if piece.is_empty() || piece == "." {
             continue;
         }
         if piece == ".." {
-            return Err(refused("member path escapes the fixture root".to_string()));
+            return Err(refused(
+                "member path contains a parent reference".to_string(),
+            ));
         }
         run.push(piece);
     }
@@ -1111,6 +1138,36 @@ mod tests {
         assert!(
             err.detail().contains("symlink"),
             "symlinked manifest must refuse at the walk: {}",
+            err.detail()
+        );
+    }
+
+    // S200: a parent reference refuses at the gate even when it
+    // resolves in-root — member reads never resolve `..` (the S82
+    // no-normalized-twin principle), and the refusal says so instead
+    // of claiming an escape that did not happen.
+    #[test]
+    fn reject_escape_refuses_in_root_parent_reference() {
+        let abs = std::env::current_dir().unwrap();
+        let err = reject_escape(&abs, "sub/../catalog.json").unwrap_err();
+        assert_eq!(err.kind(), OperatorErrorKind::BrokenPackage);
+        assert!(
+            err.detail().contains("parent reference"),
+            "honest refusal: {}",
+            err.detail()
+        );
+    }
+
+    #[test]
+    fn verify_closure_refuses_in_root_parent_reference_pin() {
+        let dir = scratch("s200-dotdot");
+        std::fs::write(dir.join("file.json"), b"{}").unwrap();
+        write_manifest(&dir, &[("sub/../file.json", None, None)]);
+        let err = verify_closure(&dir, &dir.join(MANIFEST_FILE)).unwrap_err();
+        assert_eq!(err.kind(), OperatorErrorKind::BrokenPackage);
+        assert!(
+            err.detail().contains("parent reference") && !err.detail().contains("escapes"),
+            "honest refusal: {}",
             err.detail()
         );
     }

@@ -1,11 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 //! R03/R04: executable boundary tests over the path-taking examples.
 //!
-//! Each test skips loudly when its example binary was not built: a
-//! filtered `cargo test --test example_boundary` run does not build
-//! examples, while a full `cargo test -p scopebase-linux` does. A
-//! skip therefore means "not built here", never a vacuous pass of a
-//! present binary.
+//! Each test skips when its example binary was not built: a filtered
+//! `cargo test --test example_boundary` run does not build examples,
+//! while a full `cargo test -p scopebase-linux` does. A skip therefore
+//! means "not built here", never a vacuous pass of a present binary.
+//!
+//! S210: the skip `println!` is captured (invisible) on passing runs,
+//! so filtered triage runs can pass while asserting nothing. Set
+//! `EXAMPLE_BOUNDARY_STRICT=1` (CI's invocations do) to fail loudly
+//! instead of skipping; pass `--nocapture` to see lax skips.
+//!
+//! S210b: strict fails loudly only when the example SHOULD have been
+//! built — i.e. its required feature is enabled in this build. A
+//! feature-gated example (`walk_root` needs `walk`, `observe_self`
+//! needs `process`) in a build without that feature skips even under
+//! strict: the gate never selected it, so silence is correct there.
 
 use std::path::PathBuf;
 
@@ -24,9 +34,36 @@ fn example(name: &str) -> Option<PathBuf> {
 }
 
 fn require(name: &str) -> Option<PathBuf> {
+    require_strict(name, std::env::var("EXAMPLE_BOUNDARY_STRICT").is_ok())
+}
+
+/// S210b: feature-gated examples skip (even under strict) when their
+/// required feature is off in this build — cargo never builds them
+/// there, so a missing binary is expected, not a hole. With the
+/// feature on, strict applies exactly as S210 specifies.
+fn require_gated(name: &str, feature_on: bool) -> Option<PathBuf> {
+    if !feature_on {
+        println!("SKIP example_boundary/{name}: required feature off in this build");
+        return None;
+    }
+    require(name)
+}
+
+/// S210: skip-or-fail on a missing example binary. A bare `println!`
+/// skip is captured (invisible) on passing runs, so filtered triage
+/// runs can pass while asserting nothing; strict mode panics instead.
+/// The strict bit is injected for tests; production reads
+/// `EXAMPLE_BOUNDARY_STRICT` (set in CI's invocations).
+fn require_strict(name: &str, strict: bool) -> Option<PathBuf> {
     match example(name) {
         Some(path) => Some(path),
         None => {
+            if strict {
+                panic!(
+                    "example_boundary/{name}: binary not built \
+                     (strict: run a full `cargo test -p scopebase-linux`)"
+                );
+            }
             println!(
                 "SKIP example_boundary/{name}: binary not built \
                  (run a full `cargo test -p scopebase-linux`)"
@@ -34,6 +71,20 @@ fn require(name: &str) -> Option<PathBuf> {
             None
         }
     }
+}
+
+#[test]
+fn strict_skip_fails_loudly_on_missing_binary() {
+    // S210: a bare `println!` skip is captured (invisible) on passing
+    // runs. Strict mode panics instead of skipping, so filtered runs
+    // with `EXAMPLE_BOUNDARY_STRICT` set cannot pass vacuously.
+    // (Env-free: the strict bit is injected, never read here.)
+    let outcome = std::panic::catch_unwind(|| require_strict("definitely-not-a-built-example", true));
+    assert!(outcome.is_err(), "strict skip must fail loudly");
+    assert!(
+        require_strict("definitely-not-a-built-example", false).is_none(),
+        "lax skip still skips"
+    );
 }
 
 fn scratch(tag: &str) -> PathBuf {
@@ -115,7 +166,7 @@ fn held_inspect_dead_stdout_exits_1() {
 /// R03: non-UTF-8 root refuses with usage (exit 2), never panics.
 #[test]
 fn walk_root_non_utf8_refuses() {
-    let Some(bin) = require("walk_root") else {
+    let Some(bin) = require_gated("walk_root", cfg!(feature = "walk")) else {
         return;
     };
     use std::os::unix::ffi::OsStringExt;
@@ -132,7 +183,7 @@ fn walk_root_non_utf8_refuses() {
 /// R03/R04 control: a valid root reports its entries on stdout.
 #[test]
 fn walk_root_valid_dir_reports() {
-    let Some(bin) = require("walk_root") else {
+    let Some(bin) = require_gated("walk_root", cfg!(feature = "walk")) else {
         return;
     };
     let dir = scratch("walk");
@@ -155,7 +206,7 @@ fn walk_root_valid_dir_reports() {
 /// R04: a dead stdout exits 1, never panics.
 #[test]
 fn walk_root_dead_stdout_exits_1() {
-    let Some(bin) = require("walk_root") else {
+    let Some(bin) = require_gated("walk_root", cfg!(feature = "walk")) else {
         return;
     };
     let dir = scratch("walk-full");
@@ -172,7 +223,7 @@ fn walk_root_dead_stdout_exits_1() {
 /// R04 control: the self-observation example reports its ledger.
 #[test]
 fn observe_self_reports() {
-    let Some(bin) = require("observe_self") else {
+    let Some(bin) = require_gated("observe_self", cfg!(feature = "process")) else {
         return;
     };
     let out = std::process::Command::new(bin)
@@ -191,7 +242,7 @@ fn observe_self_reports() {
 /// R04: the self-observation example exits 1 on a dead stdout.
 #[test]
 fn observe_self_dead_stdout_exits_1() {
-    let Some(bin) = require("observe_self") else {
+    let Some(bin) = require_gated("observe_self", cfg!(feature = "process")) else {
         return;
     };
     let out = std::process::Command::new(bin)

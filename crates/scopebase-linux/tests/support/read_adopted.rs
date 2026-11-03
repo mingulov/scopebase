@@ -12,7 +12,8 @@ use std::{
 struct Remove(PathBuf);
 impl Drop for Remove {
     fn drop(&mut self) {
-        std::fs::remove_file(&self.0).unwrap();
+        // S211: never panic in drop (see held_file.rs Fixture).
+        let _ = std::fs::remove_file(&self.0);
     }
 }
 fn main() {

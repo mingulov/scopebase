@@ -132,6 +132,12 @@ fn missing_fixture_is_incomplete() {
         !out.join("run").join("receipt.json").exists(),
         "refused run must not emit a receipt"
     );
+    // S201: pin the no-run-dir contract, not just receipt absence —
+    // a stray dir breaks retry (`output dir already exists`).
+    assert!(
+        !out.join("run").exists(),
+        "refused run must not create a run dir"
+    );
 }
 
 // Plan case: a differently resolved downstream library is not certified.
@@ -180,6 +186,11 @@ fn different_resolved_library_is_not_certified() {
         !out.join("run").join("receipt.json").exists(),
         "mismatched subject must not be certified"
     );
+    // S201: pin the no-run-dir contract (retry must stay possible).
+    assert!(
+        !out.join("run").exists(),
+        "refused run must not create a run dir"
+    );
 }
 
 // A mutated source digest is refused even when every name/version matches.
@@ -227,6 +238,11 @@ fn mutated_source_sha256_is_not_certified() {
     assert!(
         !out.join("run").join("receipt.json").exists(),
         "mutated source must not be certified"
+    );
+    // S201: pin the no-run-dir contract (retry must stay possible).
+    assert!(
+        !out.join("run").exists(),
+        "refused run must not create a run dir"
     );
 }
 
@@ -311,6 +327,11 @@ fn unknown_profile_has_no_bound_adapter() {
         err.kind()
     );
     assert_eq!(err.exit_code(), EXIT_INCOMPLETE);
+    // S201: pin the no-run-dir contract (retry must stay possible).
+    assert!(
+        !out.join("run").exists(),
+        "refused run must not create a run dir"
+    );
 }
 
 // Full positive: the delivery profile executes through the real engine.
@@ -1255,6 +1276,40 @@ fn describe_and_plan_have_no_effects() {
     assert!(!doc.missing.is_empty());
 }
 
+// S197: a manifest with valid pins but a schema-invalid envelope
+// (empty/missing notices, wrong kind) fails the closure; plan must
+// attribute the failure to the manifest instead of returning empty
+// missing/mismatched buckets.
+#[test]
+fn plan_attributes_manifest_schema_failure() {
+    let catalog = std::fs::read(delivery_root().join("catalog.json")).unwrap();
+    for tag in ["empty-notices", "missing-notices", "wrong-kind"] {
+        let root = copy_closure(&format!("s197-{tag}"));
+        let manifest_path = root.join("fixture-manifest.json");
+        let mut manifest = read_json(&manifest_path);
+        match tag {
+            "empty-notices" => {
+                manifest["notices"] = serde_json::json!([]);
+            }
+            "missing-notices" => {
+                manifest.as_object_mut().unwrap().remove("notices");
+            }
+            _ => {
+                manifest["kind"] = serde_json::Value::String("wrong-kind".into());
+            }
+        };
+        std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+        let doc = plan::plan(&catalog, "operator-delivery-v1", &root, "no-new-target-mappings")
+            .unwrap();
+        assert!(!doc.closure_complete, "{tag}: closure fails");
+        assert!(
+            doc.mismatched.iter().any(|m| m == "fixture-manifest.json"),
+            "{tag}: mismatched attributes the manifest: {:?}",
+            doc.mismatched
+        );
+    }
+}
+
 // S38-round3: plan confines every member read to the fixture root —
 // a symlinked member refuses through the PUBLIC planning route even
 // when its pin matches the outside bytes. The old verification
@@ -1944,6 +1999,21 @@ fn cleanup_survives_validation_to_deletion_swaps() {
         }
     }
     assert_eq!(precious, 1, "victim bytes must survive exactly once");
+    // S198: every refused round must leave its slot either gone or
+    // removable by a later cleanup_run — no manifest-less run husks.
+    // The victim dir is foreign and stays; every other surviving dir
+    // must clean successfully now that the swapping stopped.
+    for entry in walkdir(&out) {
+        if !entry.is_dir() || entry == out {
+            continue;
+        }
+        if entry.join("precious.txt").exists() {
+            continue;
+        }
+        let report = cleanup::cleanup_run(&entry, None)
+            .unwrap_or_else(|err| panic!("{} not removable: {err:?}", entry.display()));
+        assert_eq!(report.run_id, RUN_ID);
+    }
     // And cleanup still works once the swapping stops.
     let calm = out.join("calm");
     mkexclusive(&calm, 0o700);
@@ -1955,6 +2025,40 @@ fn cleanup_survives_validation_to_deletion_swaps() {
     let report = cleanup::cleanup_run(&calm, None).unwrap();
     assert_eq!(report.run_id, RUN_ID);
     assert!(!calm.exists());
+}
+
+// X1: a clear failure that never begins (non-exclusive run dir)
+// refuses with the validated manifest preserved bit-for-bit —
+// restore must not churn a surviving manifest, and nothing
+// unrestorable goes unreported.
+#[test]
+fn cleanup_clear_failure_preserves_manifest() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    const RUN_ID: &str = "cccccccccccccccccccccccccccccccc";
+    let out = scratch("cleanup-clear-fail");
+    let run = out.join("run");
+    mkexclusive(&run, 0o700);
+    let body = format!(r#"{{"schema":"operator-run-manifest-v1","run_id":"{RUN_ID}","profile":"p"}}"#);
+    std::fs::write(run.join("run-manifest.json"), body).unwrap();
+    std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o707)).unwrap();
+    let before = std::fs::metadata(run.join("run-manifest.json")).unwrap();
+    let err = cleanup::cleanup_run(&run, None).expect_err("clear refuses");
+    assert_eq!(err.kind(), OperatorErrorKind::CleanupRefused);
+    assert!(
+        !err.detail().contains("unrestorable"),
+        "nothing to restore, nothing reported: {}",
+        err.detail()
+    );
+    let after = std::fs::metadata(run.join("run-manifest.json")).unwrap();
+    assert_eq!(before.ino(), after.ino(), "manifest inode preserved");
+    assert_eq!(
+        before.permissions().mode() & 0o777,
+        after.permissions().mode() & 0o777,
+        "manifest mode preserved"
+    );
+    std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let report = cleanup::cleanup_run(&run, None).expect("still removable");
+    assert_eq!(report.run_id, RUN_ID);
 }
 
 // S37: a writer-less FIFO substituted for the run manifest refuses
@@ -2199,6 +2303,125 @@ fn ledger_file_id_traversal_is_refused() {
         !out.join("escaped.json").exists(),
         "traversal must not write anywhere unexpected"
     );
+}
+
+// S196 helpers: add one fixture-ledger artifact alias (sorted, like
+// s58_add_aliases) and drive a template override through run_delivery.
+fn s196_add_ledger_artifact(template: &mut serde_json::Value, id: &str) {
+    template["artifacts"].as_array_mut().unwrap().push(serde_json::json!({
+        "id": id,
+        "revision": 1,
+        "role": "fixture_ledger",
+        "length": "7",
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    }));
+    template["artifacts"]
+        .as_array_mut()
+        .unwrap()
+        .sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+}
+
+fn s196_run(
+    root: &Path,
+    template: &serde_json::Value,
+    tag: &str,
+) -> (Result<(), OperatorErrorKind>, PathBuf) {
+    let out = scratch(&format!("s196-{tag}"));
+    let override_path = out.join("override.json");
+    std::fs::write(&override_path, serde_json::to_vec(template).unwrap()).unwrap();
+    let outcome = delivery::run_delivery(delivery::RunRequest {
+        catalog_path: root.join("catalog.json"),
+        profile: "operator-delivery-v1".into(),
+        fixture_root: root.to_path_buf(),
+        manifest_path: None,
+        template_path: Some(override_path),
+        output_dir: out.join("run"),
+        mapping_policy: "no-new-target-mappings".into(),
+        adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+        oracle: &delivery::DeliveryOracle::new().unwrap(),
+    });
+    match outcome {
+        Ok(_) => (Ok(()), out),
+        Err(err) => {
+            let code = err.exit_code();
+            let kind = err.kind();
+            assert_eq!(
+                code,
+                EXIT_BROKEN_PACKAGE,
+                "{tag}: BrokenPackage exits 64, not 1"
+            );
+            (Err(kind), out)
+        }
+    }
+}
+
+// S196(A): a trailing-slash ledger id passes the single-component
+// guard (`Path` ignores the trailing slash) but stages `evil/.json`
+// into a missing subdir. It must refuse pre-commit, leaving no run dir.
+#[test]
+fn ledger_file_id_trailing_slash_is_refused() {
+    let root = delivery_root();
+    let mut template = read_json(&root.join("contract-template.json"));
+    template["ledger_templates"]["evil/"] =
+        serde_json::Value::String("vectors/ledger-closure.json.tmpl".into());
+    s196_add_ledger_artifact(&mut template, "evil/");
+    let (outcome, out) = s196_run(&root, &template, "slash");
+    assert_eq!(
+        outcome.unwrap_err(),
+        OperatorErrorKind::BrokenPackage,
+        "slash: kind"
+    );
+    assert!(!out.join("run").exists(), "slash: no run dir");
+}
+
+// S196(B): `contract`/`bundle` ledger ids stage over the contract and
+// bundle manifests (EEXIST). They must refuse pre-commit as reserved.
+#[test]
+fn ledger_file_id_reserved_names_are_refused() {
+    for id in ["contract", "bundle"] {
+        let root = delivery_root();
+        let mut template = read_json(&root.join("contract-template.json"));
+        template["ledger_templates"][id] =
+            serde_json::Value::String("vectors/ledger-closure.json.tmpl".into());
+        s196_add_ledger_artifact(&mut template, id);
+        let (outcome, out) = s196_run(&root, &template, &format!("reserved-{id}"));
+        assert_eq!(
+            outcome.unwrap_err(),
+            OperatorErrorKind::BrokenPackage,
+            "{id}: kind"
+        );
+        assert!(!out.join("run").exists(), "{id}: no run dir");
+    }
+}
+
+// S196(C): a fixture-ledger artifact with no template entry has no
+// staged bytes and no closure path. It must refuse pre-commit instead
+// of dying at vector-open after the creating manifest commits. The
+// ghost is wired into the binding case's ledger slot (dropping the
+// orphaned real ledger) so the bundle manifest itself stays valid and
+// only the staging-resolution guard stands between it and the write.
+#[test]
+fn ledger_artifact_without_template_is_refused() {
+    let root = delivery_root();
+    let mut template = read_json(&root.join("contract-template.json"));
+    s196_add_ledger_artifact(&mut template, "ghost-ledger");
+    template["artifacts"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|a| a["id"].as_str() != Some("binding-ledger"));
+    template["ledger_templates"]
+        .as_object_mut()
+        .unwrap()
+        .remove("binding-ledger");
+    template["vector_layout"]["TT07.binding"]["ledger"] =
+        serde_json::Value::String("ghost-ledger".into());
+    let (outcome, out) = s196_run(&root, &template, "ghost");
+    assert_eq!(
+        outcome.unwrap_err(),
+        OperatorErrorKind::BrokenPackage,
+        "ghost: kind"
+    );
+    assert!(!out.join("run").exists(), "ghost: no run dir");
 }
 
 // S58 helpers: whitespace-pad a ledger template to an exact raw
@@ -2758,6 +2981,11 @@ fn tampered_default_template_is_refused() {
     })
     .unwrap_err();
     assert_eq!(err.kind(), OperatorErrorKind::BrokenPackage);
+    // S201: pin the no-run-dir contract (retry must stay possible).
+    assert!(
+        !out.join("run").exists(),
+        "refused run must not create a run dir"
+    );
 }
 
 // F11: a second run into an occupied output dir refuses (usage error) and
@@ -3388,6 +3616,190 @@ fn pre_manifest_failures_leave_no_residue_and_retry() {
         .unwrap();
         assert_eq!(outcome.qualification, Qualification::Qualified, "{tag}: retry");
     }
+}
+
+// S199: readable umask damage (0500) repairs through the pinned
+// open fd like the parent leaf — delivery secures it back to 0700
+// and the run qualifies instead of refusing.
+#[cfg(unix)]
+#[test]
+fn fresh_output_dir_readable_damage_is_repaired() {
+    use delivery::DeliveryHookPhase;
+    use std::os::unix::fs::PermissionsExt;
+    let root = delivery_root();
+    let out = scratch("s199-umask-500");
+    let run = out.join("run");
+    let hook = |phase: DeliveryHookPhase| {
+        if phase == DeliveryHookPhase::AfterOutputMkdir {
+            std::fs::set_permissions(&run, std::fs::Permissions::from_mode(0o500)).unwrap();
+        }
+    };
+    let outcome = delivery::run_delivery_with_hook(
+        delivery::RunRequest {
+            catalog_path: root.join("catalog.json"),
+            profile: "operator-delivery-v1".into(),
+            fixture_root: root.clone(),
+            manifest_path: None,
+            template_path: None,
+            output_dir: run.clone(),
+            mapping_policy: "no-new-target-mappings".into(),
+            adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+            oracle: &delivery::DeliveryOracle::new().unwrap(),
+        },
+        Some(&hook),
+    )
+    .unwrap();
+    assert_eq!(outcome.qualification, Qualification::Qualified);
+    assert_eq!(
+        std::fs::metadata(&run).unwrap().permissions().mode() & 0o777,
+        0o700,
+        "readable damage repaired to 0700"
+    );
+}
+
+// Z4: probe the REAL capability behind the unreadable-damage
+// gate — can this process open a 0300 dir for reading? — instead
+// of branching on uid. Mirrors acquisition's optimistic open
+// exactly (RDONLY|DIRECTORY|NOFOLLOW via rustix).
+#[cfg(unix)]
+fn probe_can_open_unreadable_dir() -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+    let out = scratch("y3-probe");
+    let dir = out.join("d");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o300)).unwrap();
+    let bytes = dir.as_os_str().as_bytes();
+    let path = std::ffi::CString::new(bytes).unwrap();
+    let ok = rustix::fs::openat(
+        rustix::fs::CWD,
+        path.as_c_str(),
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )
+    .is_ok();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::remove_dir_all(&out).unwrap();
+    ok
+}
+
+// Y3: modes without owner-read (0300, 0000) REFUSE. No fd-based
+// repair exists there (`fchmod` on O_PATH is EBADF, reopen needs
+// the missing read bit), and a by-name `chmodat` races a same-uid
+// symlink swap onto a foreign target (S69; proven by replicating
+// the pin→swap→chmodat sequence: victim 0600 became 0700). The
+// refusal rolls the fresh dir back ("nothing happened") and names
+// the umask. Z4: the expected branch comes from a capability
+// probe — an override run opens through the masked bits and
+// secures via the pinned fd, so it qualifies; a behavior/probe
+// mismatch fails loudly either way.
+#[cfg(unix)]
+#[test]
+fn fresh_output_dir_unreadable_damage_refuses() {
+    use delivery::DeliveryHookPhase;
+    use std::os::unix::fs::PermissionsExt;
+    let root = delivery_root();
+    let override_present = probe_can_open_unreadable_dir();
+    for mode in [0o300, 0o000] {
+        let out = scratch(&format!("y3-umask-{mode:o}"));
+        let run = out.join("run");
+        let hook = |phase: DeliveryHookPhase| {
+            if phase == DeliveryHookPhase::AfterOutputMkdir {
+                std::fs::set_permissions(&run, std::fs::Permissions::from_mode(mode)).unwrap();
+            }
+        };
+        let outcome = delivery::run_delivery_with_hook(
+            delivery::RunRequest {
+                catalog_path: root.join("catalog.json"),
+                profile: "operator-delivery-v1".into(),
+                fixture_root: root.clone(),
+                manifest_path: None,
+                template_path: None,
+                output_dir: run.clone(),
+                mapping_policy: "no-new-target-mappings".into(),
+                adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+                oracle: &delivery::DeliveryOracle::new().unwrap(),
+            },
+            Some(&hook),
+        );
+        match (override_present, outcome) {
+            (true, Ok(outcome)) => {
+                assert_eq!(
+                    outcome.qualification,
+                    Qualification::Qualified,
+                    "override mode {mode:o}"
+                );
+                assert_eq!(
+                    std::fs::metadata(&run).unwrap().permissions().mode() & 0o777,
+                    0o700,
+                    "override mode {mode:o} secured to 0700"
+                );
+            }
+            (false, Err(err)) => {
+                assert_eq!(err.kind(), OperatorErrorKind::Engine);
+                assert!(
+                    err.detail().contains("umask"),
+                    "mode {mode:o} names the umask: {}",
+                    err.detail()
+                );
+                assert!(!run.exists(), "mode {mode:o} rolled back");
+            }
+            (true, Err(err)) => panic!(
+                "mode {mode:o} refused despite override capability: {}",
+                err.detail()
+            ),
+            (false, Ok(_)) => panic!("mode {mode:o} qualified without override capability"),
+        }
+    }
+}
+
+// Y3: a symlink substituted for the fresh output dir refuses with
+// the external target's mode unchanged — no by-name mode op may
+// ever follow a swapped link (S69 property at this call site). The
+// swapped name itself is reclaimed by rollback.
+#[cfg(unix)]
+#[test]
+fn fresh_output_symlink_substitution_leaves_target_untouched() {
+    use delivery::DeliveryHookPhase;
+    use std::os::unix::fs::PermissionsExt;
+    let root = delivery_root();
+    let out = scratch("y3-symlink-swap");
+    let run = out.join("run");
+    let victim = out.join("victim");
+    std::fs::write(&victim, b"precious").unwrap();
+    std::fs::set_permissions(&victim, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let hook = |phase: DeliveryHookPhase| {
+        if phase == DeliveryHookPhase::AfterOutputMkdir {
+            std::fs::remove_dir(&run).unwrap();
+            std::os::unix::fs::symlink(&victim, &run).unwrap();
+        }
+    };
+    let err = delivery::run_delivery_with_hook(
+        delivery::RunRequest {
+            catalog_path: root.join("catalog.json"),
+            profile: "operator-delivery-v1".into(),
+            fixture_root: root.clone(),
+            manifest_path: None,
+            template_path: None,
+            output_dir: run.clone(),
+            mapping_policy: "no-new-target-mappings".into(),
+            adapter: &mut delivery::DeliveryAdapter::new().unwrap(),
+            oracle: &delivery::DeliveryOracle::new().unwrap(),
+        },
+        Some(&hook),
+    )
+    .expect_err("symlink substitution must refuse");
+    assert_eq!(err.kind(), OperatorErrorKind::Engine);
+    assert_eq!(
+        std::fs::metadata(&victim).unwrap().permissions().mode() & 0o777,
+        0o600,
+        "external target mode unchanged"
+    );
+    assert_eq!(std::fs::read(&victim).unwrap(), b"precious");
+    assert!(!run.exists() && std::fs::symlink_metadata(&run).is_err());
 }
 
 // S42-round3: a rollback that cannot remove reports unresolved
