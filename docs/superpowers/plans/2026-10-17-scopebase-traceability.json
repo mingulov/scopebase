@@ -1127,6 +1127,63 @@
       "status": "OWNER_DECISION",
       "summary": "Owner S-call answered 2026-11-02: scoped regeneration of non-fixture surfaces; lost S143-S159 range superseded by fresh S160+ review (decision record with frozen scope).",
       "task_ids": []
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-11-02-s-regen-report.md",
+          "blob_sha1": "593c649483086408a523b289edd62343528a4888"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-11-02",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "S-regen loop closed 2026-11-02: fresh S160-S229 review (0 Critical/20 Important/50 Minor) over scoped non-fixture surfaces; 68 PASS + 2 REFUTED (S166, S219), 0 open; batch1 R5 READY + batch2 R2 READY (gpt-6.1-sol medium), close verification 1222/0/15.",
+      "task_ids": []
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-11-02-integration-evidence-audit.md",
+          "blob_sha1": "3368dc380b2a94f7c3c42f152f9a7d878a47e7a6"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-11-02",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "Integration evidence audit closed 2026-11-02: 51/51 acceptances bound to review artifacts (12 FULL, 39 ALPHA tiers); S-regen/R-stream delta implications mapped, 0 unadjudicated; 13 BARE TODO rows summarized; BP10/CP12 fresh review + tier-field schema left as follow-ups; no aggregate-green claim.",
+      "task_ids": []
+    },
+    {
+      "artifacts": [
+        {
+          "path": "docs/reviews/2026-11-02-lx08-tt03-final-index.md",
+          "blob_sha1": "6c666ad1ca09a9258ac1b66a5aaa401451fe2200"
+        }
+      ],
+      "counts_unchanged": {
+        "requirements": 120,
+        "source_obligations": 179,
+        "tasks": 86
+      },
+      "date": "2026-11-02",
+      "existing_task_ids_unchanged": true,
+      "implementation_or_qualification_claim": false,
+      "status": "REVIEW_RECORDED",
+      "summary": "LX08xTT03 final-index joint compatibility BOUND 2026-11-02: both final design indexes hash-bound (TT03 r2 1105d700, LX08 r2 b2947891); 4 observed-vs-final deltas enumerated with per-case COMPATIBLE rulings; no-cycle verified; LX08 dispatch unblocked on this gate.",
+      "task_ids": []
     }
   ],
   "profile_extensions": [

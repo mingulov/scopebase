@@ -1,6 +1,6 @@
 # ScopeBase current handoff
 
-Date: 2026-11-01. **Resumed in-session after the restart pause; TRACE-AMEND01 landed (see log tip).** Pause record: at the user's explicit request the session finished current work without starting new workers, paused the goal, and wrote this handoff with the TRACE rule GREEN in fixture and the live migration pending. R-stream (R22/R23/R24) fully closed and committed (C7/C8/R-set, external R2 READY zero findings); any-time trio verified and closed (SB02 v4, LEDGER-RECONCILE01, PACKET-GUARD01). The S143–S159 report is confirmed lost in the 10-30 host transfer — owner call ANSWERED 11-02: scoped regeneration (see step 3; executing now). The session goal (M0–M6 ScopeBase development, Codex `gpt-6.1-sol` external review after internal rounds) stays ACTIVE — resume it, do not create a replacement.
+Date: 2026-11-02 (continued session). **S-regen CLOSED in-tree (report + amendment 50, uncommitted); audit verdicts DONE (amendment 51); LX08×TT03 joint record BOUND (amendment 52); TT03 mount F-row CLOSED live (2/7).** Prior pause record (superseded): S-regen batches 1+2 externally READY with report/amendment/audit pending. R-stream closed and committed; any-time trio closed; TRACE-AMEND01 landed. Goal `goal-01a19c10-…` ACTIVE this session ("finish development by the previous plan"); commit authorization asked once, timed out — tree stays uncommitted.
 
 ## Resume here
 
@@ -9,44 +9,48 @@ You are ready to work when: the tree checks in step 1 pass, you have read the
 documents in step 2, and you hold the owner's S-call answer (step 3) or have
 re-asked it. Do not dispatch product work before that.
 
-### Where exactly are we (snapshot at the 2026-11-01 pause)
+### Where exactly are we (snapshot at the 2026-11-02 pause)
 
 | Fact | Value (verify with step 1; do not trust this table if refs moved) |
 |---|---|
-| Canonical tree | `main` in `/home/user/src/m/bpfscope` (see log tip; TRACE commit lands the registry + rule + tests + TODO row + this handoff) |
+| Canonical tree | `main` in `/home/user/src/m/bpfscope`; log tip `c87cdf9` (S-call record + amendment 49) |
 | Tasks | 51/86 accepted, 35 planned (unchanged; ledger checker AGREE) |
 | Requirements | 81 PLANNED + 39 DISPOSITIONED (5 SATISFIED + 34 SCOPED); live `check_planning_docs.py` PASS |
-| Amendments | 48 (9 grandfathered 10-18 + 39 dated hashed: 14x 10-22, 24x 10-23, 1x 10-25 merge) |
-| Dirty (owned, uncommitted — leave for review, do not commit without ask) | TRACE commit pending (checker, tests, registry, TODO row, handoff). Pre-existing untracked (not ours): `FP43-CONTINUE.md` (10-30 transfer note) |
-| R-stream | CLOSED: R23-001–023 + R24-001–006 fixed; self-review zero + external (gpt-6.1-sol medium) R2 READY. Commits `4cfc885` (C7), `88a18b6` (C8), `700cdef` (R-set). Review artifacts preserved in-tree: `.scopebase/external-reviews/{c8,rset}-20261101/` (prompts, finals, event streams, R23/R24 finding texts) |
-| Any-time trio | CLOSED (all implemented 10-30, re-verified fresh 11-01, rows closed): SB02 v4 (package-policy 65/65), LEDGER-RECONCILE01 (census AGREE, planning 132/132), PACKET-GUARD01 (117/117 at close; 129 with TRACE tests — full re-run pending in TRACE-C) |
-| TRACE-AMEND01 | LANDED 11-01 (row 84): rule + 39 dispositions (5 SATISFIED + 34 SCOPED) + 39 dated hashed amendments + semantics text; checker PASS, ledger AGREE, structural VALID, orchestration 129/129, planning 132/132; self-review zero + external R2 READY (1 merge-identity fix). Review: `.scopebase/external-reviews/trace-20261101/` |
-| S-loop | REPORT LOST (re-verified 11-02: no copy survives). Owner call ANSWERED 11-02: **(c) scoped regeneration** — fresh review of non-fixture surfaces, new IDs S160+. Record `docs/reviews/2026-11-02-s-loop-call.md`, amendment 49. Executing: internal rounds → external medium → per-finding TDD fixes → audit |
-| Orphans (left running — do not kill) | 6 sleeping test-binary orphans (ppid 1, superseded build, SN state): `1062713` (prestall probe, 11-01 09:27), `1092447` (tt04 denial probe, 10-31 02:44), `1114337`/`1116577` (middleman wrappers +1 child each, 11-01 11:08/11:09), `2398038`/`2398307` (pausing_grandchild +1 child each, 10-31 17:39/17:40). Ownership unproven on this shared host — a wrong kill is unrecoverable; owner may reap |
-| Goal | ACTIVE-paused (M0–M6 per plan; external review after internal rounds). Codex medium lane `01a19753-…` at RSET-R2-READY (`.scopebase/codex-sessions.json`); max lane untouched |
-| Toolchain/lease | Rust 1.98.1 via mise; lease root `/run/user/1000/scopebase-locks` exists; `tests/package-policy` runs WITHOUT outer wrapper (self-locks); disk 873G free |
+| Amendments | 52 (+50 S-regen close, +51 audit verdicts, +52 joint record; counts still 86/120/179) |
+| Dirty (owned, uncommitted — leave for review, do not commit without ask) | ~103 paths: S-regen fixes (95, externally READY) + close-out lint fixes + S-regen report + audit verdicts + joint record + 13 BARE summaries + audit/LX08/TT03 TODO rows + packet §12 + mount F-row test (R5 READY) + S210b strict-feature fix + qual `& wait` shell fix. Pre-existing untracked (not ours): `FP43-CONTINUE.md` (10-30 transfer note) |
+| R-stream | CLOSED and committed: `4cfc885` (C7), `88a18b6` (C8), `700cdef` (R-set); external R2 READY. Artifacts: `.scopebase/external-reviews/{c8,rset}-20261101/` |
+| Any-time trio | CLOSED and committed: SB02 (`76f4363`), LEDGER (`9df15ef`), PACKET (`fbbdfb6`); TRACE (`ce0657c`), census (`aeaa0eb`), S-call (`c87cdf9`) |
+| S-loop regen | CLOSED in-tree 11-02: 68 PASS + 2 REFUTED, 0 open; report `docs/reviews/2026-11-02-s-regen-report.md` + amendment 50; close verification 1222/0/15 @4 threads + clippy-zero-on-regen-lines (2 behavior-neutral lint fixes). Reviews: `.scopebase/external-reviews/sregen-batch{1,2}-20261102/` |
+| Audit | CLOSED in-tree 11-02: 12 FULL / 39 ALPHA, S-deltas mapped, 13 BARE rows summarized; verdicts `docs/reviews/2026-11-02-integration-evidence-audit.md` + amendment 51. No aggregate-green claim. Follow-ups: BP10/CP12 fresh review, tier-field schema |
+| Joint record | BOUND 11-02: `docs/reviews/2026-11-02-lx08-tt03-final-index.md` + amendment 52; both final indexes hash-verified, 4 deltas COMPATIBLE, no-cycle. LX08 dispatch unblocked on this gate |
+| TT03 F-rows | 2/7 CLOSED live (restricted_credential; mount row 11-02 rootless recipe, 7/7 target green, packet §12). 5 open, all LX08-blocked (seccomp×2, nested×2, audit) |
+| Flakes | ALL 10 CLOSED 11-02: invoke 20/20 (FLAKE03/04), lib 20/20 (FLAKE01, R24006, R22008, R22006, R22016B), combined 20/20 (FLAKE02, R23007, R19006). Fixes uncommitted: tick-bound survivor assert, gone-or-recycled staging asserts, R24006 argv verdict, ESRCH-tolerant scans, R/S liveness, theft-aware drain helper + diagnostics. Evidence `.scopebase/flake-gates-20261102/`. Open: R19006-F16-STRUCT (kill-gated awaits) |
+| LX08 packet | PACKET_READY 11-02 v2 (`.scopebase/preparation-20261102/lx08-packet-v2.json`, `0fb794a6`, 12/12 valid): increment 2 = Tasks 1+2 REMAINDER after accepted slice `af28be4`, Task-0 crosswalk first, accepted bytes read-only. v1 (`af13f313`) VOID (overlapped slice + misnamed tests). Dispatch BLOCKED on commit checkpoint (base must be post-commit tree); `prepare` NOT run |
+| Review debt | CLEAR 11-02: mount F-row test + joint record externally READY (R5, zero new findings; tmpfs procfs model accepted). Reviews: `.scopebase/external-reviews/mount-joint-20261102/`. Self-reviews: zero findings |
+| Gates (fresh 11-02) | Planning PASS, ledger AGREE (51/86), traceability VALID, orchestration 129/129, planning 132/132, package-policy 65/65, workspace 1222/0/15 @4 threads, clippy zero on regen+mount lines, diff-check clean. Full matrix (`ci_local.sh --full`): 20/20 runnable gates PASS (9/9 fast), 0 failures; verdict INCOMPLETE only on H33.license-admission (needs TT05-leased BPF privilege — unavailable unprivileged, by design). Fixed for green: S210b strict-feature scoping, qual `sh -c` exec-optimization shells; installed i686 rust target (repo gate requirement, disclosed) |
+| Orphans | GONE (verified 11-02: all 6 pids absent — reaped or exited; no action) |
+| Goal | ACTIVE this session: `goal-01a19c10-…` ("finish development by the previous plan"). Ledger: `.superpowers/sdd/2026-11-02-closeout/progress.md`. Codex medium lane `01a19753-…` at SREGEN-B2-R2-READY; max lane untouched |
+| Toolchain/lease | Rust 1.98.1 via mise; lease root `/run/user/1000/scopebase-locks` exists; `tests/package-policy` runs WITHOUT outer wrapper (self-locks) |
 
 ### What to do when (order, triggers, gates)
 
 | When | Work | Gate to leave it |
 |---|---|---|
-| NOW, before any dispatch | Step 1 tree verification + step 2 reading | Clean status explained; TRACE state's RED-live-checker understood |
-| FIRST (decided 11-02) | Step 3: scoped regeneration review (internal → external medium → TDD fixes) | Zero-findings close; S160+ each adjudicated |
-| THEN (needs S-call) | Step 4: integration evidence audit, then product frontier in TODO/traceability order | Per-row exits; no aggregate-green claim until audit closes |
-| AFTER S-call + TRACE | Product frontier in TODO/traceability dependency order (TT03 F-rows/final-index, LX08 joint record first, …) | Per-packet gates |
-| NEVER | Commit/push/amend without the owner's explicit in-session ask; kill the 6 orphans without owner say-so; fetch/port from live donors (fp43: um790 unreachable — frozen snapshots only); blanket-flip requirement statuses (rule forbids it); claim aggregate-green over open Criticals | — |
+| NOW, before any dispatch | Step 1 tree verification + step 2 reading | ~103-path dirty state explained (table above); tip `c87cdf9` |
+| FIRST | Re-ask commit authorization (proposed split below); matrix green is the basis | Owner commit decision |
+| THEN | Product frontier: LX08 dispatch (executor packet per PACKET-GUARD01; joint gate already bound), then TT03 seccomp/nested/audit F-rows it unblocks, then TODO/traceability order | Per-packet gates (TDD + internal + external lanes) |
+| NEVER | Commit/push/amend without the owner's explicit in-session ask; kill the 6 orphans without owner say-so; fetch/port from live donors (frozen snapshots only); blanket-flip requirement statuses (rule forbids it); claim aggregate-green over open Criticals | — |
 
 1. **Verify the tree before anything else** (all read-only):
-   - `git -C /home/user/src/m/bpfscope log --oneline -5` — must show the TRACE-AMEND01 commit on top, then `fbbdfb6` (PACKET row), `9df15ef` (LEDGER row), `76f4363` (SB02 rows); anything above is post-TRACE work.
+   - `git -C /home/user/src/m/bpfscope log --oneline -5` — must show `c87cdf9` (S-call) on top, then `aeaa0eb` (census), `ce0657c` (TRACE), `fbbdfb6` (PACKET), `9df15ef` (LEDGER); anything above is post-S-call work.
    - `git -C /home/user/src/m/bpfscope branch --show-current` — must print `main`.
-   - `git -C /home/user/src/m/bpfscope status --short` — expected clean except `?? FP43-CONTINUE.md` (pre-existing transfer note). Explain anything else before dispatch.
+   - `git -C /home/user/src/m/bpfscope status --short` — expected 95 modified files (S-regen READY batches) + `?? FP43-CONTINUE.md` (pre-existing transfer note). Explain anything else before dispatch.
    - `python3 tools/planning/check_ledger_counts.py` — must print AGREE (51/86/120/179).
    - `python3 tools/check_planning_docs.py` — must print PASS (81 PLANNED + 39 DISPOSITIONED).
-   - `python3 -m unittest discover -s tests/orchestration` — must be 129/129 OK (takes ~2.5 min).
    - Recreate the build-lease root if `/run` was wiped: `mkdir -p /run/user/1000/scopebase-locks && chmod 0700 /run/user/1000/scopebase-locks`.
-2. **Read, in order:** this file; [TODO](TODO.md) (row 84 exit + R24-FLAKE13 + review-lane note in row 81's successor context); [AGENTS](AGENTS.md) (alpha mode); the TRACE rule draft in `tools/check_planning_docs.py` (promotion + amendments blocks) and its 12 tests; [DEVELOPMENT](DEVELOPMENT.md) before dispatching workers.
-3. **Owner S-call — ANSWERED 2026-11-02 (no longer a gate):** the S143–S159 finding texts are unrecoverable (verified 11-01 and 11-02). The owner chose **(c) scoped regeneration** of non-fixture surfaces. Decision recorded in TODO (line 9 + row 82), this handoff, and traceability amendment 49 (record `docs/reviews/2026-11-02-s-loop-call.md`). Execute now: internal review rounds → external `gpt-6.1-sol medium` → per-finding TDD fixes → close at zero findings; then step 4.
-4. **After the S-call:** integration evidence audit first (full-tier vs alpha-tier per accepted task; no aggregate-green claim until it closes), then the product frontier in TODO/traceability dependency order (TT03 F-rows/final-index, LX08 joint record before LX08 dispatch). Keep TDD + review lanes per alpha mode.
+2. **Read, in order:** this file; [TODO](TODO.md); [AGENTS](AGENTS.md) (alpha mode); `.scopebase/s-regen-20261102/merged.md` (S160–S229 findings); batch close-outs `.scopebase/external-reviews/sregen-batch{1,2}-20261102/final{5,2}.txt`; [DEVELOPMENT](DEVELOPMENT.md) before dispatching workers.
+3. **S-loop regen — fixes+reviews DONE 11-02 (report pending):** S143–S159 lost; owner chose **(c) scoped regeneration** (record `docs/reviews/2026-11-02-s-loop-call.md`, amendment 49). Internal 11/11 → 70 findings (S166/S219 REFUTED) → TDD fixes → self-review gates → external batch1 R5 READY + batch2 R2 READY. Write now: regeneration report + ledger amendment; then step 4.
+4. **After the report:** integration evidence audit first (full-tier vs alpha-tier per accepted task; no aggregate-green claim until it closes), then the product frontier in TODO/traceability dependency order (TT03 F-rows/final-index, LX08 joint record before LX08 dispatch). Keep TDD + review lanes per alpha mode.
 5. **Custody:** preserve every worktree, target, cache, frozen snapshot (`.scopebase/donor-snapshots/2026-10-18` immutable history, `2026-10-29` current refresh — inspect history only via explicit `--git-dir`), review artifacts (`.scopebase/external-reviews/`), and the recovery ref. Never develop in custody worktrees. The 6 orphans above stay until the owner says reap. `FP43-CONTINUE.md` is the 10-30 transfer note — leave it.
 
 ---

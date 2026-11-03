@@ -52,6 +52,11 @@ echo "TT08 tail local execution: root=$ROOT run_root=$RUN_ROOT lock_root=$LOCK_R
 mkdir -p "$RUN_ROOT/logs"
 export CARGO_TARGET_DIR="$RUN_ROOT/target"
 export CARGO_NET_OFFLINE=1
+# S210: example-boundary skips fail loudly under CI — a filtered gate
+# run must not pass vacuously while asserting nothing about the
+# path-taking examples. Full runs build examples, so this is a no-op
+# there; filtered runs without examples fail instead of skipping.
+export EXAMPLE_BOUNDARY_STRICT=1
 
 SELECT_BIN="$CARGO_TARGET_DIR/debug/scopebase-select"
 "$ROOT/bin/scopebase-build" --lock-root "$LOCK_ROOT" --resource build -- \

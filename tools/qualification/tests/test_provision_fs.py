@@ -1174,8 +1174,11 @@ class RereviewCustodyTests(unittest.TestCase):
             self.assertEqual(len(disk["pending_procs"]), 1)
 
     def test_kill_tree_kills_wrapper_and_descendants(self):
+        # `sleep 60 & wait`: a bare `sh -c "sleep 60"` is exec'd by
+        # bash/dash (no child), so the wrapper must background + wait
+        # to guarantee a descendant reliably on every /bin/sh.
         child = subprocess.Popen(
-            ["sh", "-c", "sleep 60"],
+            ["sh", "-c", "sleep 60 & wait"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             import time as _time
@@ -2619,8 +2622,11 @@ class SecondReviewTests(unittest.TestCase):
 
     def test_kill_tree_unknown_discovery_is_not_gone(self):
         from unittest import mock
+        # `sleep 60 & wait`: a bare `sh -c "sleep 60"` is exec'd by
+        # bash/dash (no child), so the wrapper must background + wait
+        # to guarantee a descendant reliably on every /bin/sh.
         child = subprocess.Popen(
-            ["sh", "-c", "sleep 60"],
+            ["sh", "-c", "sleep 60 & wait"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             import time as _time
