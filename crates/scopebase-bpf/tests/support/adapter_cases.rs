@@ -41,6 +41,18 @@ impl Drop for TempPath {
     }
 }
 
+/// Create `path` with `contents`, refusing when the target already
+/// exists (S187): `create_new` fails `AlreadyExists` on a pre-created
+/// file or planted symlink instead of truncating through it.
+pub fn create_temp_file(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)?;
+    file.write_all(contents)
+}
+
 /// Create a temp regular file and adopt it as a `HeldFile` (LX02
 /// `from_file`). The adapter must use the held FD only; it never sees
 /// this pathname.
@@ -54,7 +66,7 @@ pub fn temp_held(contents: &[u8]) -> (TempPath, HeldFile) {
             .unwrap()
             .as_nanos()
     ));
-    std::fs::write(&path, contents).unwrap();
+    create_temp_file(&path, contents).unwrap();
     let held = HeldFile::from_file(std::fs::File::open(&path).unwrap()).unwrap();
     (TempPath(path), held)
 }

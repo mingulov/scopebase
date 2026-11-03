@@ -127,18 +127,54 @@ fn summary_of(outcome: &AttachOutcome<ScriptBackend>) -> &AttachSummary {
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Temp pathname that removes its file on drop, so retirement tests
+/// never leak temp files even on assertion failure (S187).
+struct TempPath(std::path::PathBuf);
+
+impl std::ops::Deref for TempPath {
+    type Target = std::path::PathBuf;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<std::path::Path> for TempPath {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for TempPath {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Create `path` with `contents`, refusing when the target already
+/// exists (S187): `create_new` fails `AlreadyExists` on a pre-created
+/// file or planted symlink instead of truncating through it.
+fn create_temp_file(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)?;
+    file.write_all(contents)
+}
+
 /// Create a temp regular file and adopt it as a `HeldFile` (LX02
 /// `from_file`; no procfs, no pathname retention by the pool).
-fn temp_held(contents: &[u8]) -> (std::path::PathBuf, HeldFile) {
+fn temp_held(contents: &[u8]) -> (TempPath, HeldFile) {
     let mut path = std::env::temp_dir();
     path.push(format!(
         "bp05-held-{}-{}.bin",
         std::process::id(),
         TEMP_COUNTER.fetch_add(1, Ordering::SeqCst)
     ));
-    std::fs::write(&path, contents).unwrap();
+    create_temp_file(&path, contents).unwrap();
     let held = HeldFile::from_file(std::fs::File::open(&path).unwrap()).unwrap();
-    (path, held)
+    (TempPath(path), held)
 }
 
 /// Scripted backend with a real `Arc<HeldFile>` authority: delegates
@@ -1094,7 +1130,7 @@ fn aba_retains_original_fd_until_positive_retirement() {
         "pathname now names a different file"
     );
     std::fs::remove_file(&renamed).unwrap();
-    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_file(&*path).unwrap();
     assert_eq!(
         live.stat().unwrap().key(),
         original,
@@ -1106,7 +1142,7 @@ fn aba_retains_original_fd_until_positive_retirement() {
     // confirm the pool still holds the original authority.
     let (decoy_path, decoy) = temp_held(b"decoy");
     drop(decoy);
-    std::fs::remove_file(&decoy_path).unwrap();
+    std::fs::remove_file(&*decoy_path).unwrap();
     assert_eq!(custody.remaining_links(&pool).unwrap(), 1);
     assert!(weak.upgrade().is_some(), "original still retained");
 
@@ -1417,4 +1453,19 @@ fn fork_child_native_owner_refuses_before_exec() {
         Retirement::Retired => {}
         other => panic!("expected parent Retired, found {other:?}"),
     }
+}
+
+#[test]
+fn temp_create_refuses_precreated_target() {
+    // S187: `create_new` — a pre-created file at the target (e.g. a
+    // planted symlink) refuses instead of truncating through, and the
+    // victim contents are unchanged.
+    let path =
+        std::env::temp_dir().join(format!("bp05-s187-retire-{}.tmp", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    std::fs::write(&path, b"victim").unwrap();
+    let error = create_temp_file(&path, b"overwritten").expect_err("refuses");
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(std::fs::read(&path).unwrap(), b"victim");
+    std::fs::remove_file(&path).unwrap();
 }

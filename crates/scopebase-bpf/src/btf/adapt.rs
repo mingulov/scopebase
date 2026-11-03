@@ -101,8 +101,10 @@ fn aux_rule(kind: u8, vlen: u32) -> Result<(usize, u64), OperationError> {
             Err(malformed())
         }
     };
+    // S160: FUNC vlen is linkage (static/global/extern = 0/1/2);
+    // VAR linkage lives in the aux word, so VAR vlen must be 0.
     let linkage = |want: usize| {
-        if vlen <= 1 {
+        if vlen <= 2 {
             Ok((want, u64::from(want != 0)))
         } else {
             Err(malformed())
@@ -112,7 +114,7 @@ fn aux_rule(kind: u8, vlen: u32) -> Result<(usize, u64), OperationError> {
         1 => fixed(4),
         2 | 7 | 8 | 9 | 10 | 11 | 16 | 18 => fixed(0),
         12 => linkage(0),
-        14 => linkage(4),
+        14 => fixed(4),
         3 => fixed(12),
         4 | 5 | 15 | 19 => {
             let units = u64::from(vlen);

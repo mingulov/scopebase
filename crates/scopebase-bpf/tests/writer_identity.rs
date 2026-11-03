@@ -508,7 +508,7 @@ fn fixture_fold_cases() {
 
 /// Finite-capacity key model with `BPF_NOEXIST` insert discipline (test-only
 /// mirror of the donor `SimKwho` shape): an insert into a full map fails and
-/// the key stays absent.
+/// the key stays absent, and re-inserting an existing key fails (EEXIST).
 struct SimMap {
     keys: HashSet<(u64, u32)>,
     capacity: usize,
@@ -516,14 +516,30 @@ struct SimMap {
 
 impl SimMap {
     fn insert_noexist(&mut self, key: (u64, u32)) -> bool {
+        // S186: real `BPF_NOEXIST` fails EEXIST on an existing key.
         if self.keys.contains(&key) {
-            return true;
+            return false;
         }
         if self.keys.len() >= self.capacity {
             return false;
         }
         self.keys.insert(key)
     }
+}
+
+#[test]
+fn sim_map_noexist_reinsert_refuses() {
+    // S186: real `BPF_NOEXIST` fails EEXIST when the key exists; the
+    // sim must refuse the twin insert instead of modelling success.
+    let mut sim = SimMap {
+        keys: HashSet::new(),
+        capacity: 8,
+    };
+    assert!(sim.insert_noexist((7, 11)), "first insert admits");
+    assert!(
+        !sim.insert_noexist((7, 11)),
+        "twin insert refuses (EEXIST edge)"
+    );
 }
 
 #[test]

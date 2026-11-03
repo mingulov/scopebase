@@ -147,6 +147,16 @@ impl BtfView {
     /// empty result is a valid answer, not an error.
     pub fn types_named(&self, name: &str) -> Result<Vec<TypeRef>, OperationError> {
         let mut budget = WorkBudget::new(&self.limits);
+        self.types_named_inner(name, &mut budget)
+    }
+
+    /// S181: inner helper sharing the caller's budget, so one
+    /// top-level call consumes at most `work_steps` total.
+    fn types_named_inner(
+        &self,
+        name: &str,
+        budget: &mut WorkBudget,
+    ) -> Result<Vec<TypeRef>, OperationError> {
         budget.consume(Stage::BtfQuery, 1)?;
         let mut ids = if name.is_empty() {
             self.facts
@@ -211,11 +221,22 @@ impl BtfView {
     /// Returned offsets are absolute from the root parent, and every
     /// level is containment-checked against its immediate parent.
     pub fn member(&self, parent: TypeRef, path: &[&str]) -> Result<MemberExtent, OperationError> {
+        let mut budget = WorkBudget::new(&self.limits);
+        self.member_inner(parent, path, &mut budget)
+    }
+
+    /// S181: inner helper sharing the caller's budget, so one
+    /// top-level call consumes at most `work_steps` total.
+    fn member_inner(
+        &self,
+        parent: TypeRef,
+        path: &[&str],
+        mut budget: &mut WorkBudget,
+    ) -> Result<MemberExtent, OperationError> {
         let id = self.check_ref(parent)?;
         if path.is_empty() {
             return Err(invalid_query());
         }
-        let mut budget = WorkBudget::new(&self.limits);
         budget.consume(Stage::BtfQuery, 1)?;
         let root = self.chase_wrapper(id, &mut budget)?;
         let (_, mut current_size) = self.composite_parts(root)?;
@@ -351,7 +372,7 @@ impl BtfView {
         let mut budget = WorkBudget::new(&self.limits);
         budget.consume(Stage::BtfQuery, 1)?;
         let mut vars = Vec::new();
-        for candidate in self.types_named(map_name)? {
+        for candidate in self.types_named_inner(map_name, &mut budget)? {
             budget.consume(Stage::BtfQuery, 1)?;
             if matches!(self.resolve(candidate.id)?, btf_rs::Type::Var(_)) {
                 vars.push(candidate.id);
@@ -399,7 +420,9 @@ impl BtfView {
         }
         let mut linkage = Vec::new();
         for member in ["key", "value"] {
-            let extent = self.member(definition, &[member]).map_err(|error| {
+            let extent = self
+                .member_inner(definition, &[member], &mut budget)
+                .map_err(|error| {
                 if error.kind() == ErrorKind::InvalidInput {
                     malformed_query()
                 } else {
@@ -749,6 +772,13 @@ impl BtfView {
             .ok_or_else(invalid_query)
     }
 
+    /// Hard ceiling on anonymous-member descent, independent of caller
+    /// limits. S163: `wrapper_depth` may legally be `usize::MAX`, and each
+    /// level holds a frame (cloned member vec), so caller limits alone
+    /// cannot bound stack use. 256 exceeds real-world nesting ~100x while
+    /// staying far under thread stacks.
+    const MAX_ANONYMOUS_DEPTH: usize = 256;
+
     /// Collect `segment` hits under anonymous composites, bounded.
     fn search_anonymous(
         &self,
@@ -777,7 +807,8 @@ impl BtfView {
             let Some((inner, _)) = self.composite_members(chased)? else {
                 continue;
             };
-            if depth.saturating_add(1) > self.limits.wrapper_depth {
+            if depth.saturating_add(1) > self.limits.wrapper_depth.min(Self::MAX_ANONYMOUS_DEPTH)
+            {
                 return Err(limit_query());
             }
             stack.push(chased);

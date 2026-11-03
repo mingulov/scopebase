@@ -12,8 +12,8 @@ mod retire;
 
 pub use execute::execute_plan;
 pub use plan::{
-    adjudicate_split, is_terminal_error, AttachBackend, AttachMode, AttachPlan, CustodyCharge,
-    ErrorAction, ErrorPolicy, NativeAttach, NativeRetire, Site,
+    adjudicate_split, adjudicate_split_verbose, is_terminal_error, AttachBackend, AttachMode,
+    AttachPlan, CustodyCharge, ErrorAction, ErrorPolicy, NativeAttach, NativeRetire, Site,
 };
 pub use pool::{
     PoolClose, PoolReconcile, PoolUsage, RetirementBudget, RetirementCapacity, RetirementPool,

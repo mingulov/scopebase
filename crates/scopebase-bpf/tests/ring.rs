@@ -768,6 +768,13 @@ fn drain_bounded_sweep_seeded() {
         rng ^= rng << 17;
         rng
     };
+    // S167: the sweep must pin behavior, not just determinism. An
+    // all-fail drain regression passes a `.ok()`-only oracle vacuously
+    // (`None == None`, invariant block skipped), so outcomes are kept as
+    // Results, both twins must agree on ok/err status, and the sweep
+    // must observe both outcomes across its 500 seeds.
+    let mut ok_count = 0usize;
+    let mut err_count = 0usize;
     for _ in 0..500 {
         let frame_count = (next_rand() % 8) as usize;
         let mut ops = Vec::new();
@@ -794,14 +801,24 @@ fn drain_bounded_sweep_seeded() {
         };
         let mut first = ScriptedSource::new(4096, 0, span, ops.clone());
         let mut first_seen = 0;
-        let first_result = first
-            .consume_before(stop, budget, &mut |_| first_seen += 1)
-            .ok();
+        let first_outcome = first.consume_before(stop, budget, &mut |_| first_seen += 1);
         let mut second = ScriptedSource::new(4096, 0, span, ops);
         let mut second_seen = 0;
-        let second_result = second
-            .consume_before(stop, budget, &mut |_| second_seen += 1)
-            .ok();
+        let second_outcome = second.consume_before(stop, budget, &mut |_| second_seen += 1);
+        match (&first_outcome, &second_outcome) {
+            (Ok(_), Ok(_)) => ok_count += 1,
+            (Err(first_err), Err(second_err)) => {
+                err_count += 1;
+                assert_eq!(
+                    (first_err.kind(), first_err.stage()),
+                    (second_err.kind(), second_err.stage()),
+                    "twin failures agree"
+                );
+            }
+            _ => panic!("drain twins must agree on ok/err status"),
+        }
+        let first_result = first_outcome.ok();
+        let second_result = second_outcome.ok();
         assert_eq!(
             (
                 first_result
@@ -833,6 +850,24 @@ fn drain_bounded_sweep_seeded() {
             }
         }
     }
+    assert!(ok_count > 0, "sweep must observe successful drains");
+    assert!(err_count > 0, "sweep must observe failing drains");
+}
+
+#[test]
+fn drain_fixed_vector_pins_exact_outcome() {
+    // S167: one fixed seed-vector with an exact outcome, so a drain
+    // that returns Ok with wrong counts fails even if the sweep twins
+    // agree with each other.
+    let mut source = ScriptedSource::new(4096, 0, 32, vec![emit(&[1; 8]), emit(&[2; 8])]);
+    let mut seen = Vec::new();
+    let result = source
+        .consume_before(32, full_budget(), &mut |bytes| seen.push(bytes.to_vec()))
+        .expect("fixed vector drains");
+    assert_eq!(result.boundary, BoundaryState::Reached);
+    assert_eq!((result.records, result.bytes, result.discarded), (2, 32, 0));
+    assert_eq!(seen, vec![vec![1; 8], vec![2; 8]]);
+    assert_eq!(source.consumer(), 32);
 }
 
 fn staging_root() -> Json {

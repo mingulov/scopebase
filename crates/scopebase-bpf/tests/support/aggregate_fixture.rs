@@ -38,19 +38,30 @@ where
             }
             return Err("later totals slot disappeared".into());
         };
-        if raw.len() != count * 120 {
+        // S185: checked like `fold` — a huge count refuses instead of
+        // panicking (debug) or wrapping (release).
+        let expected = count
+            .checked_mul(120)
+            .ok_or("totals requires 120-byte lanes")?;
+        if raw.len() != expected {
             return Err("totals requires 120-byte lanes".into());
         }
         all.extend_from_slice(&raw);
     }
-    fold(&all, count * slots as usize, checked).map(Some)
+    let total = count
+        .checked_mul(slots as usize)
+        .ok_or("aggregate extent")?;
+    fold(&all, total, checked).map(Some)
 }
 pub fn diagnostic<F>(count: usize, mut lookup: F) -> Result<Vec<u64>, String>
 where
     F: FnMut(&[u8]) -> Result<Option<Vec<u8>>, String>,
 {
     let raw = lookup(&0u32.to_le_bytes())?.ok_or("mandatory diagnostic absent")?;
-    if raw.len() != count * 8 {
+    let expected = count
+        .checked_mul(8)
+        .ok_or("diagnostic requires 8-byte lanes")?;
+    if raw.len() != expected {
         return Err("diagnostic requires 8-byte lanes".into());
     }
     Ok(raw
@@ -73,6 +84,11 @@ pub fn walk<F>(keys: &[&[u8]], count: usize, mut lookup: F) -> Result<Vec<[u64; 
 where
     F: FnMut(&[u8]) -> Result<Option<Vec<u8>>, String>,
 {
+    // Refuse before allocating: `with_capacity(count)` below must never
+    // see a count whose extent multiply overflows.
+    let expected = count
+        .checked_mul(120)
+        .ok_or("aggregate requires120-byte lanes")?;
     let mut lanes = Vec::with_capacity(count);
     let mut out = Vec::new();
     for key in keys {
@@ -80,7 +96,7 @@ where
             return Err("aggregate key requires260 bytes".into());
         }
         let raw = lookup(key)?.ok_or("known aggregate key disappeared")?;
-        if raw.len() != count * 120 {
+        if raw.len() != expected {
             return Err("aggregate requires120-byte lanes".into());
         }
         lanes.clear();

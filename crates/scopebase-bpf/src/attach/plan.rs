@@ -255,10 +255,28 @@ pub fn adjudicate_split<P: ErrorPolicy>(
     error: &OperationError,
     batch_len: usize,
 ) -> ErrorAction {
+    adjudicate_split_verbose(policy, error, batch_len).0
+}
+
+/// Like [`adjudicate_split`], additionally reporting whether the caller
+/// policy itself voted [`ErrorAction::AbortAndRollback`].
+///
+/// S162: the executor fail-fasts (ends the walk) only on a caller-voted
+/// abort — except terminal errors (S180), which always end the walk
+/// after a single consult-once policy vote, with the stacked ranges
+/// refused. A library-forced abort on an unsplittable batch under an
+/// isolate vote refuses the node in place while salvage continues. The
+/// flag is true exactly when the policy voted abort.
+pub fn adjudicate_split_verbose<P: ErrorPolicy>(
+    policy: &mut P,
+    error: &OperationError,
+    batch_len: usize,
+) -> (ErrorAction, bool) {
     let vote = policy.classify(error, batch_len);
+    let voted_abort = vote == ErrorAction::AbortAndRollback;
     if batch_len < 2 || is_terminal_error(error) {
-        ErrorAction::AbortAndRollback
+        (ErrorAction::AbortAndRollback, voted_abort)
     } else {
-        vote
+        (vote, voted_abort)
     }
 }

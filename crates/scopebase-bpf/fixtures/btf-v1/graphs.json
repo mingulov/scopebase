@@ -342,7 +342,7 @@
           "id": 6,
           "kind": 14,
           "name_off": 32,
-          "vlen": 1,
+          "vlen": 0,
           "kind_flag": 0,
           "size_or_type": 5,
           "aux_hex": "01000000"
@@ -360,7 +360,7 @@
           "id": 8,
           "kind": 14,
           "name_off": 45,
-          "vlen": 1,
+          "vlen": 0,
           "kind_flag": 0,
           "size_or_type": 5,
           "aux_hex": "01000000"
@@ -378,7 +378,7 @@
           "id": 10,
           "kind": 14,
           "name_off": 64,
-          "vlen": 1,
+          "vlen": 0,
           "kind_flag": 0,
           "size_or_type": 9,
           "aux_hex": "01000000"

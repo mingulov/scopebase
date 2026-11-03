@@ -17,7 +17,8 @@
 //! `OWNER-2026-10-23`; third-party/upstream lines never copied.
 
 use crate::attach::plan::{
-    adjudicate_split, is_terminal_error, AttachBackend, AttachPlan, ErrorAction, ErrorPolicy,
+    adjudicate_split_verbose, is_terminal_error, AttachBackend, AttachPlan, ErrorAction,
+    ErrorPolicy,
     NativeAttach,
 };
 use crate::attach::pool::{LinkSlot, LinkState, RetirementPool, UncertainSlot, UncertainState};
@@ -43,10 +44,12 @@ fn refused<B: AttachBackend>(cause: OperationError) -> AttachOutcome<B> {
 /// any refusal returns `RolledBack` with an empty summary and no custody.
 /// The walk below then visits the split tree LIFO (right pushed, left
 /// visited first) through [`AttachPlan::split_sites`] and
-/// [`adjudicate_split`]: each node is attempted once (at most `2n-1`
-/// calls), only side-effect-free isolatable multi failures split, and
-/// terminal denials, singleton refusals and uncertain acquisitions end
-/// the walk. Every attached link and uncertain custody is registered in
+/// [`adjudicate_split_verbose`]: each node is attempted once (at most
+/// `2n-1` calls), only side-effect-free isolatable multi failures
+/// split, and terminal denials, caller-voted aborts and uncertain
+/// acquisitions end the walk (library-forced singleton aborts refuse
+/// in place while salvage continues). Every attached link and
+/// uncertain custody is registered in
 /// the reserved pool entry before the next backend or policy call, so a
 /// policy panic propagates with all native owners and the authority
 /// preserved in the pool. Uncertain results are terminal and never
@@ -184,13 +187,23 @@ pub fn execute_plan<B: AttachBackend, P: ErrorPolicy>(
             }
             NativeAttach::NoEffect(error) => {
                 if is_terminal_error(&error) {
+                    // S180: terminal errors break, but the policy is
+                    // still consulted exactly once (vote recorded for
+                    // audit). Stacked ranges refuse with the node so
+                    // the summary accounts every site.
+                    let _ = adjudicate_split_verbose(policy, &error, node.len());
                     refused_sites.extend(node.clone());
+                    for range in stack.drain(..) {
+                        refused_sites.extend(range);
+                    }
                     if cause.is_none() {
                         cause = Some(error);
                     }
                     break;
                 }
-                match adjudicate_split(policy, &error, node.len()) {
+                let (action, voted_abort) =
+                    adjudicate_split_verbose(policy, &error, node.len());
+                match action {
                     ErrorAction::IsolateSites => {
                         match plan.split_sites(node.clone()) {
                             Ok(Some((left, right))) => {
@@ -213,6 +226,18 @@ pub fn execute_plan<B: AttachBackend, P: ErrorPolicy>(
                         refused_sites.extend(node.clone());
                         if cause.is_none() {
                             cause = Some(error);
+                        }
+                        if voted_abort {
+                            // S162: caller-voted abort is fail-fast and
+                            // ends the walk. Unvisited stacked ranges
+                            // refuse with the aborted node so the summary
+                            // accounts every site. Library-forced
+                            // singleton aborts refuse in place while
+                            // salvage continues.
+                            for range in stack.drain(..) {
+                                refused_sites.extend(range);
+                            }
+                            break;
                         }
                     }
                 }

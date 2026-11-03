@@ -568,3 +568,15 @@ fn aggregate_totals_diagnostic_policies_stay_distinct() {
         [0, 0]
     );
 }
+
+#[test]
+fn aggregate_huge_counts_refuse_without_panic() {
+    // S185: `fold` already checks its extent multiply; `totals`,
+    // `diagnostic` and `walk` must refuse huge counts with typed
+    // extent errors instead of panicking (debug) or wrapping
+    // (release) on the identical computation.
+    assert!(aggregate::totals(1, usize::MAX, true, |_| Ok(Some(vec![0u8; 8]))).is_err());
+    assert!(aggregate::diagnostic(usize::MAX, |_| Ok(Some(vec![0u8; 8]))).is_err());
+    let key = [0u8; 260];
+    assert!(aggregate::walk(&[&key[..]], usize::MAX, |_| Ok(Some(vec![0u8; 8]))).is_err());
+}

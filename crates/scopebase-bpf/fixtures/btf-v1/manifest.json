@@ -15,7 +15,7 @@
       "size": 719
     },
     "images/maps.bin": {
-      "sha256": "4f1a9d86ac26363d9b7d09dc43c5a07e0b8188a72a2bd4ce378aeae637c8752d",
+      "sha256": "2774398345573324c8b24529e28a9662b31d0ab9cc79d634fe0118f48fd6cf46",
       "size": 342
     },
     "images/cycle.bin": {
@@ -23,7 +23,7 @@
       "size": 82
     },
     "graphs.json": {
-      "sha256": "84a5d51a22d60ae3995337311069830adaaeb877c34f4cd1f714ff12631acde6",
+      "sha256": "2e515308a74dfbed9398c8e9d603210d4112789e2c172da224f623ba9f0beaaa",
       "size": 10154
     },
     "expected.json": {

@@ -250,3 +250,62 @@ where
     }
     Ok(out)
 }
+
+/// Load the `--native` two-lane seed file: exactly two 88-byte lanes.
+///
+/// S164/S165: wrong-length files refuse with a typed extent diagnostic
+/// instead of panicking the caller's slice copy.
+pub fn load_two_lane_bytes(path: &std::path::Path) -> Result<[u8; 176], String> {
+    let data = std::fs::read(path).map_err(|e| format!("lane file unreadable: {e}"))?;
+    if data.len() != 176 {
+        return Err(format!(
+            "WHO schema/extent requires exactly 176 lane bytes, found {}",
+            data.len()
+        ));
+    }
+    let mut out = [0u8; 176];
+    out.copy_from_slice(&data);
+    Ok(out)
+}
+
+#[cfg(test)]
+mod lane_tests {
+    // S164/S165: the --native lane file must be exactly two 88-byte
+    // lanes; short/long files refuse typed instead of panicking the
+    // slice copy (shared by the example and the delivered consumer).
+    use super::load_two_lane_bytes;
+    use std::io::Write;
+
+    fn write_lane(dir: &std::path::Path, name: &str, len: usize) -> std::path::PathBuf {
+        let path = dir.join(name);
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(&vec![0xabu8; len]).unwrap();
+        path
+    }
+
+    #[test]
+    fn wrong_length_lane_files_refuse_typed() {
+        let dir = std::env::temp_dir().join(format!("s164-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for len in [0usize, 160, 175, 177, 200] {
+            let path = write_lane(&dir, &format!("lane{len}.bin"), len);
+            let error = load_two_lane_bytes(&path).expect_err("must refuse typed");
+            assert!(
+                error.contains("176"),
+                "diagnostic names the extent: {error}"
+            );
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn exact_length_lane_file_loads() {
+        let dir = std::env::temp_dir().join(format!("s164-ok-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = write_lane(&dir, "lane176.bin", 176);
+        let bytes = load_two_lane_bytes(&path).expect("176 bytes load");
+        assert_eq!(bytes.len(), 176);
+        assert!(bytes.iter().all(|b| *b == 0xab));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

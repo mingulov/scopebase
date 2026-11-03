@@ -12,7 +12,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fixture::require_offline();
         let fd = fixture::create(5, 16, 88, 2, 0, None)?;
         let mut data = vec![0; 65536 * 88];
-        data[..176].copy_from_slice(&std::fs::read(root.join("who88-two-lanes.bin"))?);
+        let lane = who::load_two_lane_bytes(&root.join("who88-two-lanes.bin"))?;
+        data[..176].copy_from_slice(&lane);
         fixture::update(&fd, &key, &data)?;
         let mut map = ValidatedMap::from_owned_fd(
             fd,

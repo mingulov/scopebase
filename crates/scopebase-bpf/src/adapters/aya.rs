@@ -202,10 +202,26 @@ unsafe impl<S: AyaUprobeShape> AttachBackend for AyaBackend<S> {
 /// [`AyaUprobeShape`] seam. This calls upstream APIs; it vendors no
 /// upstream code.
 ///
-/// Live-use gap (named follow-up for the BP11/TT05 owner): upstream
-/// keeps the probe kind private, so [`AyaUprobeShape::is_return`] cannot
-/// read it back here and entry is assumed. Live use must thread the
-/// declared kind at adoption before routing return modes.
+/// S161: the probe kind is read back via the public
+/// [`aya::programs::UProbe::kind`] (aya 0.14 exposes `ProbeKind::Entry`
+/// vs `ProbeKind::Return`; e.g. `from_pin` adopts either), so Return*
+/// modes route against the adopted kind instead of assuming entry.
+#[cfg(feature = "aya")]
+fn uprobe_is_return(kind: aya::programs::ProbeKind) -> bool {
+    matches!(kind, aya::programs::ProbeKind::Return)
+}
+
+/// Render the authority's live FD as the `/proc/self/fd/N` path that
+/// upstream aya 0.14 `UProbe::attach` requires (it takes a path, not an
+/// FD). This is still the held-FD route — the path derives from the live
+/// FD, never a caller pathname — but it needs `/proc` mounted: in a
+/// container without `/proc`, attach fails with a mapped upstream
+/// `Backend` error even though the FD itself is valid (S183).
+#[cfg(feature = "aya")]
+fn proc_fd_path(held_fd: RawFd) -> String {
+    format!("/proc/self/fd/{held_fd}")
+}
+
 #[cfg(feature = "aya")]
 impl AyaUprobeShape for aya::programs::UProbe {
     type Link = Option<aya::programs::uprobe::UProbeLinkId>;
@@ -216,7 +232,7 @@ impl AyaUprobeShape for aya::programs::UProbe {
     }
 
     fn is_return(&self) -> bool {
-        false
+        uprobe_is_return(self.kind())
     }
 
     fn attach_batch(
@@ -237,8 +253,9 @@ impl AyaUprobeShape for aya::programs::UProbe {
             ));
         }
         // Held-FD route: the only path handed to upstream is derived
-        // from the authority's live FD, never a caller pathname.
-        let target = format!("/proc/self/fd/{held_fd}");
+        // from the authority's live FD, never a caller pathname (see
+        // `proc_fd_path` for the `/proc` dependency this implies).
+        let target = proc_fd_path(held_fd);
         let point = aya::programs::uprobe::UProbeAttachPoint {
             location: aya::programs::uprobe::UProbeAttachLocation::AbsoluteOffset(sites[0].offset),
             cookie: Some(sites[0].cookie),
@@ -308,5 +325,30 @@ fn map_program_error(cause: aya::programs::ProgramError, stage: Stage) -> Operat
             OperationError::new(kind, stage, errno, None)
         }
         _ => OperationError::new(ErrorKind::Backend, stage, None, None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // S161: the real binding must route return uprobes to Return* modes.
+    // A live `UProbe` value needs bpffs/kernel (NOT_RUN live cell), so the
+    // kind->is_return mapping is pinned here and `is_return` delegates to it.
+    #[cfg(feature = "aya")]
+    #[test]
+    fn uprobe_kind_maps_to_is_return() {
+        use aya::programs::ProbeKind;
+        use super::uprobe_is_return;
+        assert!(!uprobe_is_return(ProbeKind::Entry));
+        assert!(uprobe_is_return(ProbeKind::Return));
+    }
+
+    // S183: upstream aya 0.14 `attach` takes a path, so the held FD is
+    // handed over as `/proc/self/fd/N` — the route needs `/proc` mounted
+    // even though the FD itself is the authority. Pin the derivation.
+    #[cfg(feature = "aya")]
+    #[test]
+    fn held_fd_derives_proc_self_fd_path() {
+        use super::proc_fd_path;
+        assert_eq!(proc_fd_path(3), "/proc/self/fd/3");
     }
 }

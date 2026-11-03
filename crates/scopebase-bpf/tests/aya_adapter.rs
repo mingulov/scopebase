@@ -370,6 +370,7 @@ fn loader_errno_classification() {
 fn tc05_tc06_standalone_seam_ratified() {
     use scopebase_testkit::object::graph::extract_call_graph;
     use scopebase_testkit::object::inspect_final_object;
+    use scopebase_testkit::object::prune_dead_code;
     use scopebase_testkit::object::ObjectContract;
     // Minimal contract in the exact TC01/TC03 schema shape.
     let contract_json = serde_json::json!({
@@ -393,10 +394,30 @@ fn tc05_tc06_standalone_seam_ratified() {
     assert_eq!(inspect_err.kind(), ErrorKind::Malformed);
     let graph_err = extract_call_graph(&truncated, &contract, &limits()).unwrap_err();
     assert_eq!(graph_err.kind(), ErrorKind::Malformed);
-    // TC06 keeps its own bounded decode beside them (see testkit
-    // object::prune docs): the probe binaries live in the repo vectors.
-    let prune_probe = repo_bytes("fixtures/bpf/native/configure.json");
-    assert!(!prune_probe.is_empty());
+    // S168: TC06 keeps its own bounded decode beside them — the leg
+    // must call the actual TC06 entry point, not pin a repo file's
+    // nonemptiness. Truncated input refuses with the TC06 marker
+    // (Malformed/Inspect plus the tc06 source tag: TC03 refuses at
+    // Admission, TC05 tags tc05); a valid control object succeeds.
+    let prune_err = prune_dead_code(&truncated, &contract, &limits()).unwrap_err();
+    assert_eq!(prune_err.kind(), ErrorKind::Malformed);
+    assert_eq!(prune_err.stage(), scopebase_bpf::Stage::Inspect);
+    let mut tagged = false;
+    let mut cursor = std::error::Error::source(&prune_err);
+    while let Some(cause) = cursor {
+        if cause.to_string().contains("tc06 prune") {
+            tagged = true;
+        }
+        cursor = std::error::Error::source(cause);
+    }
+    assert!(tagged, "TC06 refusal carries its source tag");
+    // Live-only control object: emitted 2026-11-02 by testkit
+    // `prune_fixture(Endian::Little, &[("live", 2)], &["live"])`
+    // (object_rules.rs); re-emit from that builder if TC06's accepted
+    // shape evolves. sha256 d03df6df….
+    let valid = repo_bytes("crates/scopebase-bpf/tests/fixtures/tc06-live.o");
+    let pruned = prune_dead_code(&valid, &contract, &limits()).expect("valid control prunes");
+    assert_eq!(pruned, valid, "dead-empty prune echoes its input");
 }
 
 #[cfg(feature = "aya")]
@@ -407,4 +428,18 @@ fn real_aya_binding_implements_shape() {
     // privileged kernel and stay NOT_RUN here.
     fn assert_shape<S: AyaUprobeShape>() {}
     assert_shape::<aya::programs::UProbe>();
+}
+
+#[test]
+fn temp_create_refuses_precreated_target() {
+    // S187: `create_new` — a pre-created file at the target (e.g. a
+    // planted symlink) refuses instead of truncating through, and the
+    // victim contents are unchanged.
+    let path = std::env::temp_dir().join(format!("bp10-s187-aya-{}.tmp", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    std::fs::write(&path, b"victim").unwrap();
+    let error = adapter_cases::create_temp_file(&path, b"overwritten").expect_err("refuses");
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(std::fs::read(&path).unwrap(), b"victim");
+    std::fs::remove_file(&path).unwrap();
 }

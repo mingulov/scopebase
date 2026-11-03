@@ -141,10 +141,14 @@ impl StagedRecord {
                     .with_required_size(self.slot.len()),
             );
         }
-        destination[..self.slot.len()].copy_from_slice(&self.slot);
+        // Bump before copy (mirrors `offer`'s bump-before-store): a
+        // saturated counter refuses with the slot, the destination and
+        // every counter untouched instead of clearing the record.
         let delivered = self.slot.len();
+        let next = bump(self.stats.delivered)?;
+        destination[..delivered].copy_from_slice(&self.slot);
         self.slot.clear();
-        self.stats.delivered = bump(self.stats.delivered)?;
+        self.stats.delivered = next;
         self.stats.held = 0;
         Ok(delivered)
     }
@@ -159,4 +163,31 @@ fn bump(counter: u64) -> Result<u64, OperationError> {
     counter
         .checked_add(1)
         .ok_or_else(|| OperationError::new(ErrorKind::Overflow, Stage::Drain, None, None))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StagedRecord;
+    use crate::{ErrorKind, Stage};
+
+    #[test]
+    fn copy_into_overflow_retains_slot() {
+        // S182: counter exhaustion refuses with the slot and every
+        // counter untouched (the `offer` bump-before-store pattern) —
+        // never a cleared slot with held==1. A retained record keeps
+        // refusing on retry instead of reporting Ok(0).
+        let mut stage = StagedRecord::new(1024).unwrap();
+        stage.offer(&[7u8; 8]).unwrap();
+        stage.stats.delivered = u64::MAX;
+        let mut dst = [0u8; 64];
+        let error = stage.copy_into(&mut dst).expect_err("saturated counter refuses");
+        assert_eq!(error.kind(), ErrorKind::Overflow);
+        assert_eq!(error.stage(), Stage::Drain);
+        assert_eq!(stage.stats.delivered, u64::MAX);
+        assert_eq!(stage.stats.held, 1);
+        assert!(
+            stage.copy_into(&mut dst).is_err(),
+            "retained record refuses again, not Ok(0)"
+        );
+    }
 }

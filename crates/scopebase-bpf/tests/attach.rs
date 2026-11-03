@@ -18,11 +18,12 @@
 //! exists. Live attach cells are NOT_RUN (later owners).
 
 use scopebase_bpf::attach::{
-    adjudicate_split, execute_plan, is_terminal_error, AttachBackend, AttachMode, AttachOutcome,
-    AttachPlan, CustodyCharge, ErrorAction, ErrorPolicy, NativeAttach, NativeRetire,
-    RetirementPool, Site,
+    adjudicate_split, adjudicate_split_verbose, execute_plan, is_terminal_error, AttachBackend,
+    AttachMode, AttachOutcome, AttachPlan, CustodyCharge, ErrorAction, ErrorPolicy,
+    NativeAttach, NativeRetire, RetirementPool, Site,
 };
 use scopebase_bpf::{ErrorKind, Limits, OperationError, Stage};
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::ops::Range;
 
@@ -376,6 +377,37 @@ fn singleton_cannot_split() {
         adjudicate_split(&mut policy, &error(ErrorKind::InvalidInput), 0),
         ErrorAction::AbortAndRollback,
         "empty batch cannot split"
+    );
+}
+
+#[test]
+fn verbose_reports_whether_abort_was_voted() {
+    // S162: the executor fail-fasts only on a caller-voted abort;
+    // library-forced singleton aborts refuse in place while salvage
+    // continues. The vote bit distinguishes the two.
+    let mut isolate = FixedPolicy(ErrorAction::IsolateSites);
+    assert_eq!(
+        adjudicate_split_verbose(&mut isolate, &error(ErrorKind::InvalidInput), 1),
+        (ErrorAction::AbortAndRollback, false),
+        "forced singleton abort reports unvoted"
+    );
+    let mut abort = FixedPolicy(ErrorAction::AbortAndRollback);
+    assert_eq!(
+        adjudicate_split_verbose(&mut abort, &error(ErrorKind::InvalidInput), 4),
+        (ErrorAction::AbortAndRollback, true),
+        "voted multi abort reports voted"
+    );
+    let mut abort_single = FixedPolicy(ErrorAction::AbortAndRollback);
+    assert_eq!(
+        adjudicate_split_verbose(&mut abort_single, &error(ErrorKind::InvalidInput), 1),
+        (ErrorAction::AbortAndRollback, true),
+        "voted singleton abort reports voted"
+    );
+    let mut isolate_multi = FixedPolicy(ErrorAction::IsolateSites);
+    assert_eq!(
+        adjudicate_split_verbose(&mut isolate_multi, &error(ErrorKind::InvalidInput), 4),
+        (ErrorAction::IsolateSites, false),
+        "isolate vote reports unvoted-abort"
     );
 }
 
@@ -880,7 +912,9 @@ struct FakeUncertain {
 
 #[derive(Debug)]
 struct FakeBackend {
-    charges: usize,
+    // S184: `Cell` so `custody_charge` (&self) counts its own calls;
+    // the test asserts on the fake's count, never a manual bump.
+    charges: Cell<usize>,
     attaches: usize,
     retires: usize,
     uncertain_retires: usize,
@@ -897,6 +931,7 @@ unsafe impl AttachBackend for FakeBackend {
         _authority: &Self::Authority,
         sites: &[Site],
     ) -> Result<CustodyCharge, OperationError> {
+        self.charges.set(self.charges.get() + 1);
         Ok(CustodyCharge {
             link_slots: sites.len(),
             retained_bytes: sites.len() * 16,
@@ -938,14 +973,13 @@ unsafe impl AttachBackend for FakeBackend {
 #[test]
 fn fake_backend_exercises_unsafe_contract() {
     let mut backend = FakeBackend {
-        charges: 0,
+        charges: Cell::new(0),
         attaches: 0,
         retires: 0,
         uncertain_retires: 0,
     };
     let plan = plan_for(2);
     let charge = backend.custody_charge(&(), plan.sites()).unwrap();
-    backend.charges += 1;
     assert_eq!(charge.link_slots, 2);
     assert_eq!(charge.retained_bytes, 32);
     match backend.attach(&(), &plan.sites()[0..1], AttachMode::EntrySingle) {
@@ -977,7 +1011,7 @@ fn fake_backend_exercises_unsafe_contract() {
     assert_eq!(backend.attaches, 3);
     assert_eq!(backend.retires, 1);
     assert_eq!(backend.uncertain_retires, 1);
-    assert_eq!(backend.charges, 1);
+    assert_eq!(backend.charges.get(), 1, "fake counted its own charge");
 }
 
 fn assert_send_sync<T: Send + Sync>() {}
@@ -1185,6 +1219,89 @@ fn effectful_policy_abort_rolls_back_without_splitting() {
     }
     assert_eq!(probe.attach_order(), vec!["0-4".to_string()]);
     assert_eq!(probe.retire_calls.get(), 0, "nothing to roll back");
+}
+
+struct IsolateOnceThenAbort {
+    votes: usize,
+}
+
+impl ErrorPolicy for IsolateOnceThenAbort {
+    fn classify(&mut self, _error: &OperationError, _batch_len: usize) -> ErrorAction {
+        self.votes += 1;
+        if self.votes == 1 {
+            ErrorAction::IsolateSites
+        } else {
+            ErrorAction::AbortAndRollback
+        }
+    }
+}
+
+#[test]
+fn effectful_abort_stops_walk_before_stacked_sibling() {
+    // S162: an abort vote on the left half must end the walk; the
+    // already-stacked right half must never see a native attach.
+    let mut pool = RetirementPool::new(effectful_capacity()).unwrap();
+    let mut backend = ScriptBackend::new(sites(4));
+    backend.script_node((0, 4), ScriptOutcome::NoEffect(ErrorKind::InvalidInput));
+    backend.script_node((0, 2), ScriptOutcome::NoEffect(ErrorKind::InvalidInput));
+    let probe = Rc::clone(&backend.probe);
+    let mut policy = IsolateOnceThenAbort { votes: 0 };
+    let outcome = execute_plan(
+        &mut pool,
+        backend,
+        (),
+        plan_for(4),
+        &mut policy,
+        &generous_limits(),
+    );
+    match outcome {
+        AttachOutcome::RolledBack { summary, cause } => {
+            assert_eq!(cause.kind(), ErrorKind::InvalidInput);
+            assert_eq!(summary.attempts, 2, "abort stops the walk");
+            assert_eq!(summary.attached_sites, 0);
+            assert_eq!(summary.refused_sites, sites(4));
+        }
+        other => panic!("expected RolledBack, found {other:?}"),
+    }
+    assert_eq!(
+        probe.attach_order(),
+        vec!["0-4".to_string(), "0-2".to_string()],
+        "no native attach after the abort vote"
+    );
+}
+
+#[test]
+fn effectful_terminal_error_consults_policy_once() {
+    // S180: terminal errors break the walk but must still consult the
+    // policy exactly once (vote recorded for audit), like every other
+    // failed node.
+    let mut pool = RetirementPool::new(effectful_capacity()).unwrap();
+    let mut backend = ScriptBackend::new(sites(4));
+    backend.script_node((0, 4), ScriptOutcome::NoEffect(ErrorKind::Denied));
+    let probe = Rc::clone(&backend.probe);
+    let mut policy = CountingPolicy {
+        action: ErrorAction::IsolateSites,
+        calls: 0,
+    };
+    let outcome = execute_plan(
+        &mut pool,
+        backend,
+        (),
+        plan_for(4),
+        &mut policy,
+        &generous_limits(),
+    );
+    match outcome {
+        AttachOutcome::RolledBack { summary, cause } => {
+            assert_eq!(cause.kind(), ErrorKind::Denied);
+            assert_eq!(summary.attempts, 1);
+            assert_eq!(summary.attached_sites, 0);
+            assert_eq!(summary.refused_sites, sites(4));
+        }
+        other => panic!("expected RolledBack, found {other:?}"),
+    }
+    assert_eq!(policy.calls, 1, "terminal error consults policy once");
+    assert_eq!(probe.attach_order(), vec!["0-4".to_string()]);
 }
 
 #[test]

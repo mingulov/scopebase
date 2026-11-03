@@ -494,7 +494,7 @@ fn unknown_kind_and_bad_header_refs_refuse() {
 
 #[test]
 fn bogus_func_linkage_refuses() {
-    // FUNC vlen is linkage (0/1); anything else is corrupt.
+    // FUNC vlen is linkage (0/1/2); anything else is corrupt.
     let bytes = SHAPES.to_vec();
     let (type_at, _) = type_section(&bytes);
     // Walk to ID 12 (do_work FUNC): sizes are fixed by the generator.
@@ -542,7 +542,11 @@ fn func_linkage_is_exposed_per_vlen() {
     }
     let info = read_u32(&bytes, pos + 4);
     assert_eq!(((info >> 24) & 0x1F) as u8, 12, "expected FUNC at ID 12");
-    for (vlen, want) in [(0u32, FuncLinkage::Static), (1u32, FuncLinkage::Global)] {
+    for (vlen, want) in [
+        (0u32, FuncLinkage::Static),
+        (1u32, FuncLinkage::Global),
+        (2u32, FuncLinkage::Extern),
+    ] {
         let mut twin = bytes.clone();
         write_u32(&mut twin, pos + 4, (info & !0xFFFF) | vlen);
         let view = parse_base(&twin).expect("vlen twin parses");
@@ -559,7 +563,7 @@ fn func_linkage_is_exposed_per_vlen() {
 #[test]
 fn decl_tag_and_var_aux_rules_refuse() {
     // DECL_TAG carries a fixed 4-byte component index (vlen must be 0);
-    // VAR carries linkage 0/1 with one aux word.
+    // VAR carries linkage in its aux word (vlen must be 0).
     let bytes = SHAPES.to_vec();
     let (type_at, _) = type_section(&bytes);
     let mut pos = type_at;
@@ -587,7 +591,9 @@ fn decl_tag_and_var_aux_rules_refuse() {
     write_u32(&mut mutant, decl_tag_at + 4, info | 1);
     let error = parse_base(&mutant).expect_err("DECL_TAG vlen must refuse");
     expect_error(&error, ErrorKind::Malformed, Stage::Admission);
-    // VAR linkage beyond 0/1 is corrupt (maps.bin ID 6 is a VAR).
+    // S160: VAR linkage lives in the aux word, so vlen must be 0;
+    // vlen 1 (previously admitted) and 9 are both corrupt
+    // (maps.bin ID 6 is a VAR).
     let maps = MAPS.to_vec();
     let (maps_at, _) = type_section(&maps);
     let mut pos = maps_at;
@@ -605,10 +611,12 @@ fn decl_tag_and_var_aux_rules_refuse() {
     }
     let info = read_u32(&maps, pos + 4);
     assert_eq!(((info >> 24) & 0x1F) as u8, 14, "expected VAR at ID 6");
-    let mut mutant = maps.clone();
-    write_u32(&mut mutant, pos + 4, (info & !0xFFFF) | 9);
-    let error = parse_base(&mutant).expect_err("bogus VAR linkage must refuse");
-    expect_error(&error, ErrorKind::Malformed, Stage::Admission);
+    for vlen in [1u32, 9u32] {
+        let mut mutant = maps.clone();
+        write_u32(&mut mutant, pos + 4, (info & !0xFFFF) | vlen);
+        let error = parse_base(&mutant).expect_err("bogus VAR vlen must refuse");
+        expect_error(&error, ErrorKind::Malformed, Stage::Admission);
+    }
 }
 
 #[test]
@@ -1147,6 +1155,147 @@ fn anonymous_ambiguity_refuses_typed() {
     let _ = domain;
 }
 
+fn tiny_map_image() -> Vec<u8> {
+    // S181: minimal VAR+DATASEC map image (5 types): u32, ptr->u32,
+    // struct{key,value}, VAR my_map, DATASEC .maps. Strings: my_map=1,
+    // key=8, value=12, .maps=18.
+    let mut types = Vec::new();
+    fn header(types: &mut Vec<u8>, name: u32, kind: u32, vlen: u32, size_or_type: u32) {
+        types.extend_from_slice(&name.to_le_bytes());
+        types.extend_from_slice(&((kind << 24) | vlen).to_le_bytes());
+        types.extend_from_slice(&size_or_type.to_le_bytes());
+    }
+    header(&mut types, 0, 1, 0, 4);
+    types.extend_from_slice(&32u32.to_le_bytes());
+    header(&mut types, 0, 2, 0, 1);
+    header(&mut types, 0, 4, 2, 16);
+    types.extend_from_slice(&8u32.to_le_bytes());
+    types.extend_from_slice(&2u32.to_le_bytes());
+    types.extend_from_slice(&0u32.to_le_bytes());
+    types.extend_from_slice(&12u32.to_le_bytes());
+    types.extend_from_slice(&2u32.to_le_bytes());
+    types.extend_from_slice(&64u32.to_le_bytes());
+    header(&mut types, 1, 14, 0, 3);
+    types.extend_from_slice(&1u32.to_le_bytes());
+    header(&mut types, 18, 15, 1, 8);
+    types.extend_from_slice(&4u32.to_le_bytes());
+    types.extend_from_slice(&0u32.to_le_bytes());
+    types.extend_from_slice(&8u32.to_le_bytes());
+    let strs = b"\0my_map\0key\0value\0.maps\0";
+    let mut image = Vec::new();
+    image.extend_from_slice(&0xEB9Fu16.to_le_bytes());
+    image.push(1);
+    image.push(0);
+    image.extend_from_slice(&24u32.to_le_bytes());
+    image.extend_from_slice(&0u32.to_le_bytes());
+    image.extend_from_slice(&(types.len() as u32).to_le_bytes());
+    image.extend_from_slice(&(types.len() as u32).to_le_bytes());
+    image.extend_from_slice(&(strs.len() as u32).to_le_bytes());
+    image.extend_from_slice(&types);
+    image.extend_from_slice(strs);
+    image
+}
+
+fn deep_anon_chain(levels: u32) -> Vec<u8> {
+    // S163: chain of single-anonymous-member structs; the last struct
+    // holds the named "target" member. Forces descent `levels` deep.
+    let mut types = Vec::new();
+    for i in 1..=levels {
+        let last = i == levels;
+        let name_off = 0u32;
+        let info = (4u32 << 24) | 1;
+        types.extend_from_slice(&name_off.to_le_bytes());
+        types.extend_from_slice(&info.to_le_bytes());
+        types.extend_from_slice(&4u32.to_le_bytes());
+        let member_name = if last { 1u32 } else { 0u32 };
+        let member_type = if last { 1u32 } else { i + 1 };
+        types.extend_from_slice(&member_name.to_le_bytes());
+        types.extend_from_slice(&member_type.to_le_bytes());
+        types.extend_from_slice(&0u32.to_le_bytes());
+    }
+    let strs = b"\0target\0";
+    let mut image = Vec::new();
+    image.extend_from_slice(&0xEB9Fu16.to_le_bytes());
+    image.push(1);
+    image.push(0);
+    image.extend_from_slice(&24u32.to_le_bytes());
+    image.extend_from_slice(&0u32.to_le_bytes());
+    image.extend_from_slice(&(types.len() as u32).to_le_bytes());
+    image.extend_from_slice(&(types.len() as u32).to_le_bytes());
+    image.extend_from_slice(&(strs.len() as u32).to_le_bytes());
+    image.extend_from_slice(&types);
+    image.extend_from_slice(strs);
+    image
+}
+
+#[test]
+fn deep_anonymous_descent_hits_hard_ceiling_typed() {
+    // S163: wrapper_depth is caller-controlled (usize::MAX is valid), so
+    // descent needs a hard ceiling independent of caller limits: a
+    // 300-deep chain under generous limits must refuse typed, never
+    // recurse unbounded (stack overflow aborts the process; observed at
+    // 1100 levels pre-fix). Depth 300 stays well under test-thread
+    // stacks pre-fix, so RED is a clean assertion failure, not an abort.
+    let image = deep_anon_chain(300);
+    let view = BtfView::parse(
+        BtfImages {
+            base: &image,
+            module: None,
+            byte_order: ByteOrder::Little,
+        },
+        BtfLimits {
+            image_bytes: 1 << 20,
+            types: 4096,
+            strings: 1 << 20,
+            wrapper_depth: 1_000_000,
+            work_steps: 10_000_000,
+        },
+    )
+    .expect("deep chain parses");
+    let error = view
+        .member(
+            TypeRef {
+                domain: view.domain_id(),
+                id: 1,
+            },
+            &["target"],
+        )
+        .expect_err("300-deep descent must hit the hard ceiling");
+    expect_error(&error, ErrorKind::LimitExceeded, Stage::BtfQuery);
+}
+
+#[test]
+fn moderate_anonymous_descent_still_resolves() {
+    // S163 positive control: a 200-deep chain (10x real-world nesting,
+    // under the hard ceiling) resolves under generous limits.
+    let image = deep_anon_chain(200);
+    let view = BtfView::parse(
+        BtfImages {
+            base: &image,
+            module: None,
+            byte_order: ByteOrder::Little,
+        },
+        BtfLimits {
+            image_bytes: 1 << 20,
+            types: 4096,
+            strings: 1 << 20,
+            wrapper_depth: 1_000_000,
+            work_steps: 10_000_000,
+        },
+    )
+    .expect("200-deep chain parses");
+    let extent = view
+        .member(
+            TypeRef {
+                domain: view.domain_id(),
+                id: 1,
+            },
+            &["target"],
+        )
+        .expect("200-deep descent resolves under the ceiling");
+    assert_eq!(extent.ty.id, 1);
+}
+
 #[test]
 fn function_shapes_match_expected_graph() {
     let root = expected_root();
@@ -1309,6 +1458,47 @@ fn map_zero_ids_refuse() {
         ErrorKind::Malformed,
         Stage::BtfQuery,
     );
+}
+
+#[test]
+fn map_types_shares_one_work_budget() {
+    // S181: nested helpers share the caller's budget — one map_types
+    // call consumes at most work_steps total. Calibrated on the tiny
+    // image: K=16 parses and succeeds pre-fix (nested fresh budgets),
+    // and refuses post-fix (shared budget exhausted by nested costs).
+    let image = tiny_map_image();
+    let view = BtfView::parse(
+        BtfImages {
+            base: &image,
+            module: None,
+            byte_order: ByteOrder::Little,
+        },
+        BtfLimits {
+            image_bytes: 1 << 20,
+            types: 4096,
+            strings: 1 << 20,
+            wrapper_depth: 16,
+            work_steps: 16,
+        },
+    )
+    .expect("tiny map parses under K=16");
+    expect_error(
+        &view.map_types("my_map").expect_err("shared budget refuses"),
+        ErrorKind::LimitExceeded,
+        Stage::BtfQuery,
+    );
+    // Generous budget still links key/value exactly.
+    let view = BtfView::parse(
+        BtfImages {
+            base: &image,
+            module: None,
+            byte_order: ByteOrder::Little,
+        },
+        limits(),
+    )
+    .expect("tiny map parses");
+    let (key, value) = view.map_types("my_map").expect("tiny map links");
+    assert_eq!((key.id, value.id), (1, 1));
 }
 
 #[test]

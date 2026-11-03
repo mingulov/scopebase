@@ -12,8 +12,8 @@ use scopebase_bpf::{
 #[test]
 #[ignore = "N1 requires admitted owned SMP/offline BPF resource"]
 fn n1_geometry_activity() {
-    fixture::require_offline();
-    let ids = fixture::possible();
+    fixture::require_offline().expect("BLOCKED_ENVIRONMENT: N1 needs >=2 possible CPUs with an offline lane");
+    let ids = fixture::possible().expect("BLOCKED_ENVIRONMENT: N1 needs readable possible cpulist");
     for kind in [5, 6] {
         for size in [1, 7, 8, 9, 13, 88, 120] {
             let fd = fixture::create(kind, 4, size, 2, 0, None).unwrap();
@@ -349,7 +349,10 @@ fn n9_retention() {
         );
     }
     let topology = LiveCpuTopology::acquire(&fixture::limits()).unwrap();
-    assert_eq!(topology.snapshot().ids(), fixture::possible());
+    assert_eq!(
+        topology.snapshot().ids(),
+        fixture::possible().expect("BLOCKED_ENVIRONMENT: needs readable possible cpulist")
+    );
     topology.revalidate().unwrap();
 }
 #[derive(Debug)]
@@ -569,7 +572,9 @@ fn n9_guarded_output() {
 #[test]
 #[ignore = "N9 full physical raw-copy canary and logical boundary control"]
 fn n9_raw_guard() {
-    let count = fixture::possible().len();
+    let count = fixture::possible()
+        .expect("BLOCKED_ENVIRONMENT: N9 needs readable possible cpulist")
+        .len();
     assert!(count >= 2);
     for kind in [5, 6] {
         for size in [1usize, 7, 8, 9, 13, 88, 120] {

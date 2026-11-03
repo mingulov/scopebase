@@ -35,8 +35,10 @@ pub struct TypeRef {
 /// and the type maximum; there is no implicit unlimited sentinel and no
 /// `Default`. A zero cap refuses the corresponding positive work or
 /// resource at admission. Caps are independent: no cross-field inequality
-/// is implied. Budgets apply per call: parsing consumes one work budget,
-/// and each later query draws a fresh budget of the same size.
+/// is implied. Budgets apply per top-level call: parsing consumes one
+/// work budget, and each later query draws a fresh budget of the same
+/// size which nested helpers share (S181), so one call never consumes
+/// a multiple of the cap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BtfLimits {
     /// Maximum admitted bytes per image (base and module separately).

@@ -70,7 +70,7 @@ pub fn write_only(id: u32) -> io::Result<OwnedFd> {
     call(14, &mut a).map(adopt)
 }
 pub fn update(fd: &OwnedFd, key: &[u8], backing: &[u8]) -> io::Result<()> {
-    let _bounded_independent_ids = possible();
+    let _bounded_independent_ids = possible()?;
     let mut a = [0; 32];
     put(&mut a, 0, fd.as_raw_fd() as u32);
     ptr(&mut a, 8, key.as_ptr() as u64);
@@ -93,41 +93,65 @@ pub fn expected(kind: u32, key: u32, size: usize, max: u32, flags: u32) -> MapEx
         btf: None,
     }
 }
-pub fn possible() -> Vec<u32> {
-    let s = std::fs::read_to_string("/sys/devices/system/cpu/possible")
-        .expect("fixture possible setup");
+/// Pure cpulist parser core (S188): `None` on any malformed shape —
+/// empty reads, truncated/inverted ranges, non-numeric content,
+/// duplicate lanes or lanes past the 65536 physical bound. Never panics.
+pub fn parse_cpulist(text: &str) -> Option<Vec<u32>> {
     let mut set = [false; 65536];
-    for part in s.trim().split(',') {
+    for part in text.trim().split(',') {
         let mut ends = part.split('-');
-        let lo: usize = ends.next().unwrap().parse().unwrap();
-        let hi: usize = ends.next().map(|v| v.parse().unwrap()).unwrap_or(lo);
-        assert!(ends.next().is_none() && lo <= hi && hi < 65536);
+        let lo: usize = ends.next()?.parse().ok()?;
+        let hi: usize = match ends.next() {
+            Some(v) => v.parse().ok()?,
+            None => lo,
+        };
+        if ends.next().is_some() || lo > hi || hi >= 65536 {
+            return None;
+        }
         for slot in &mut set[lo..=hi] {
-            assert!(!*slot);
+            if *slot {
+                return None;
+            }
             *slot = true;
         }
     }
-    set.iter()
-        .enumerate()
-        .filter_map(|(n, on)| on.then_some(n as u32))
-        .collect()
+    Some(
+        set.iter()
+            .enumerate()
+            .filter_map(|(n, on)| on.then_some(n as u32))
+            .collect(),
+    )
 }
-pub fn require_offline() {
-    let p = possible();
-    let online = std::fs::read_to_string("/sys/devices/system/cpu/online").unwrap();
-    assert!(p.len() >= 2, "BLOCKED_ENVIRONMENT >=2 possible required");
-    let count = online
-        .trim()
-        .split(',')
-        .map(|s| {
-            let mut e = s.split('-');
-            let lo: usize = e.next().unwrap().parse().unwrap();
-            e.next()
-                .map(|v| v.parse::<usize>().unwrap() - lo + 1)
-                .unwrap_or(1)
-        })
-        .sum::<usize>();
-    assert!(count < p.len(), "BLOCKED_ENVIRONMENT offline lane required");
+
+fn malformed_cpulist(detail: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, detail)
+}
+
+/// Possible-CPU ids from live sysfs. Missing `/sys` or malformed
+/// content is an `io::Result` error; privileged call sites label it
+/// `BLOCKED_ENVIRONMENT` via `expect`.
+pub fn possible() -> io::Result<Vec<u32>> {
+    let text = std::fs::read_to_string("/sys/devices/system/cpu/possible")?;
+    parse_cpulist(&text).ok_or_else(|| malformed_cpulist("malformed possible cpulist"))
+}
+
+/// Require an SMP topology with at least one offline lane. Unmet
+/// conditions are `BLOCKED_ENVIRONMENT` errors for the call site.
+pub fn require_offline() -> io::Result<()> {
+    let possible = possible()?;
+    let online = std::fs::read_to_string("/sys/devices/system/cpu/online")?;
+    let lanes = parse_cpulist(&online).ok_or_else(|| malformed_cpulist("malformed online cpulist"))?;
+    if possible.len() < 2 {
+        return Err(io::Error::other(
+            "BLOCKED_ENVIRONMENT >=2 possible required",
+        ));
+    }
+    if lanes.len() >= possible.len() {
+        return Err(io::Error::other(
+            "BLOCKED_ENVIRONMENT offline lane required",
+        ));
+    }
+    Ok(())
 }
 pub fn pattern(value: usize) -> Vec<u8> {
     let stride = (value + 7) / 8 * 8;
@@ -148,6 +172,27 @@ pub fn raw_full_copy(fd: &OwnedFd, key: &[u8], backing: &mut [u8]) -> io::Result
     ptr(&mut a, 16, backing.as_mut_ptr() as u64);
     call(1, &mut a).map(|_| ())
 }
+#[cfg(test)]
+mod tests {
+    use super::parse_cpulist;
+
+    #[test]
+    fn cpulist_valid_shapes_parse() {
+        assert_eq!(parse_cpulist("0"), Some(vec![0]));
+        assert_eq!(parse_cpulist("0-3,8"), Some(vec![0, 1, 2, 3, 8]));
+        assert_eq!(parse_cpulist("  1,4-5\n"), Some(vec![1, 4, 5]));
+    }
+
+    #[test]
+    fn cpulist_malformed_refuses() {
+        // S188: empty reads, truncated ranges, inverted ranges and
+        // non-numeric content refuse instead of panicking.
+        for malformed in ["", "0-", "3-0", "x", "0-1-2", "0,0", "65536", "0-999999"] {
+            assert_eq!(parse_cpulist(malformed), None, "{malformed:?} refuses");
+        }
+    }
+}
+
 pub fn reuse_external_number(fd: &OwnedFd) -> io::Result<OwnedFd> {
     let number = fd.as_raw_fd();
     // SAFETY: replace only the exact externally held alias with another owned map

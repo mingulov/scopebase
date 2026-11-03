@@ -100,7 +100,8 @@ class Image:
         self.record(self.string(name), KIND_FUNC, linkage, proto)
 
     def var(self, name, target, linkage=1):
-        self.record(self.string(name), KIND_VAR, linkage, target,
+        # S160: VAR linkage lives in the aux word; vlen must be 0.
+        self.record(self.string(name), KIND_VAR, 0, target,
                     struct.pack("<I", linkage))
 
     def datasec(self, name, size, entries):
