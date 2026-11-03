@@ -329,3 +329,27 @@ pub fn pidfd_getfd_raw(pidfd: RawFd, target: libc::c_int) -> Result<RawFd, i32> 
         Ok(fd as RawFd)
     }
 }
+
+/// XRV1-J1: raw `pidfd_send_signal` — signal the BIRTH a
+/// pidfd pins (never a recycled number: ESRCH ⟺ our birth
+/// reaped, not a missing number). Null siginfo, zero
+/// flags. Returns () or the exact errno observed.
+pub fn pidfd_send_signal_raw(pidfd: RawFd, sig: libc::c_int) -> Result<(), i32> {
+    // SAFETY: direct syscall with owned pidfd, signal,
+    // null siginfo, zero flags; returns 0 or -1 with
+    // errno set.
+    let got = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            pidfd as libc::c_long,
+            sig as libc::c_long,
+            0 as libc::c_long,
+            0 as libc::c_long,
+        )
+    };
+    if got < 0 {
+        Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(-1))
+    } else {
+        Ok(())
+    }
+}

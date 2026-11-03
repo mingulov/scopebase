@@ -117,15 +117,20 @@ fn main() {
             usage();
         }
     };
-    let tool = flag_value(&argv, "--tool").unwrap_or_else(|| usage());
-    let closure_path = flag_value(&argv, "--closure").unwrap_or_else(|| usage());
-    let timeout: u64 = flag_value(&argv, "--timeout")
-        .and_then(|text| text.parse().ok())
-        .unwrap_or_else(|| usage());
+    // S221: the dash splits trusted driver flags from the
+    // untrusted subject argv. Resolve it FIRST and scan only the
+    // driver side: a flag present only after `--` is the tool's
+    // argument, never driver configuration.
     let dash = argv.iter().position(|arg| arg == "--").unwrap_or_else(|| {
         cli::err_line("missing -- before tool argv");
         usage();
     });
+    let driver = &argv[..dash];
+    let tool = flag_value(driver, "--tool").unwrap_or_else(|| usage());
+    let closure_path = flag_value(driver, "--closure").unwrap_or_else(|| usage());
+    let timeout: u64 = flag_value(driver, "--timeout")
+        .and_then(|text| text.parse().ok())
+        .unwrap_or_else(|| usage());
     let args: Vec<std::ffi::OsString> = argv[dash + 1..]
         .iter()
         .map(std::ffi::OsString::from)
@@ -240,7 +245,7 @@ fn main() {
     // observation — the denial branch then faces a proven-live
     // descendant, and the test's grandchild-dead assertion is a
     // closed chain, never a startup race.
-    let gate_path = flag_value(&argv, "--gate-pidfile");
+    let gate_path = flag_value(driver, "--gate-pidfile");
     let observe_gate = gate_path.map(|path| {
         let gate: Box<dyn FnOnce() + Send> = Box::new(move || {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

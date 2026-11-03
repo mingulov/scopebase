@@ -37,6 +37,22 @@ fn repo_bytes(relative: &str) -> Vec<u8> {
         .unwrap_or_else(|error| panic!("read {relative}: {error}"))
 }
 
+/// S228: objects-dir listing with a naming failure. A single non-UTF8
+/// file must fail naming the directory and entry — not a bare
+/// `into_string().unwrap()` panic far from the cause.
+fn object_names(dir: &str) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .unwrap_or_else(|error| panic!("list {dir}: {error}"))
+        .map(|entry| {
+            let name = entry
+                .unwrap_or_else(|error| panic!("list {dir} entry: {error}"))
+                .file_name();
+            name.into_string()
+                .unwrap_or_else(|bad| panic!("object name in {dir} is not UTF-8: {bad:?}"))
+        })
+        .collect()
+}
+
 fn digest(bytes: &[u8]) -> [u8; 32] {
     let mut out = [0u8; 32];
     out.copy_from_slice(&Sha256::digest(bytes));
@@ -387,10 +403,7 @@ fn shipped_objects_match_expected_hashes_and_families() {
         16,
         "every emitted and derived object recorded"
     );
-    let on_disk = std::fs::read_dir(format!("{MANIFEST_DIR}/../../fixtures/bpf/isa/objects"))
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-        .collect::<Vec<_>>();
+    let on_disk = object_names(&format!("{MANIFEST_DIR}/../../fixtures/bpf/isa/objects"));
     assert_eq!(on_disk.len(), 16, "no unrecorded object on disk");
     let contract = contract(Some("v4"), &["signed-div", "acqrel", "signed-load-move"]);
     let big = ObjectContract::from_json(
@@ -1237,4 +1250,44 @@ fn documented_mutants_match_exercised_ids() {
     for id in EXERCISED {
         assert!(documented.contains(id), "mutant {id} documented");
     }
+}
+
+/// S228: a non-UTF8 entry fails naming the directory — never a bare
+/// `into_string().unwrap()` panic. External R1-2: `catch_unwind`
+/// instead of `should_panic`, so the fixture cleanup below is
+/// reachable and the no-leak assert runs on every passing run.
+#[cfg(unix)]
+#[test]
+fn s228_object_names_names_non_utf8_entry() {
+    use std::os::unix::ffi::OsStringExt;
+    let dir = std::env::temp_dir().join(format!(
+        "s228-isa-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let bad = dir.join(std::ffi::OsString::from_vec(vec![0xff, 0xfe]));
+    std::fs::write(&bad, b"x").unwrap();
+    let outcome = std::panic::catch_unwind(|| object_names(dir.to_str().unwrap()));
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(!dir.exists(), "fixture must not leak");
+    let message = match outcome {
+        Err(payload) => payload
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| {
+                payload
+                    .downcast_ref::<&str>()
+                    .map(|text| text.to_string())
+            })
+            .unwrap_or_default(),
+        Ok(_) => panic!("non-UTF8 entry must panic"),
+    };
+    assert!(
+        message.contains("is not UTF-8"),
+        "unexpected panic: {message}"
+    );
 }

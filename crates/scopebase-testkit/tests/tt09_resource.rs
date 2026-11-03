@@ -424,3 +424,29 @@ fn assert_ids_unique(ids: &[ConsumerId]) {
         assert!(seen.insert(id.get()), "duplicate consumer id");
     }
 }
+
+#[test]
+fn s223_bytes_peak_is_an_independent_channel() {
+    // S223: peak_bytes is NOT dominated by retained/working. It is an
+    // independent high-water channel (PeakTracker-fed); the Bytes
+    // dimension verdicts retained+working while Memory verdicts the
+    // peak alone. A sampler that accounts bytes but observes no peak
+    // (peak 0, working nonzero) is coherent, not broken — the
+    // InconsistentPeak guard covers counter/peak pairs only. This pins
+    // the exclusion so a future guard extension breaks loudly.
+    let s = ResourceSample::new(ResourceSampleValues {
+        retained_bytes: 10,
+        working_bytes: 10,
+        peak_bytes: 0,
+        ..Default::default()
+    })
+    .expect("bytes without peak must be admitted");
+    assert_eq!(s.peak_bytes(), 0);
+    // And the reverse: a peak with no current byte holding is the
+    // normal post-release high-water reading.
+    ResourceSample::new(ResourceSampleValues {
+        peak_bytes: 4096,
+        ..Default::default()
+    })
+    .expect("peak without current bytes must be admitted");
+}

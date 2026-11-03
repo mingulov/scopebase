@@ -233,14 +233,19 @@ fn main() {
     // S05-round3: deferred denial — installed by the entry hook
     // mid-audit, never upfront.
     let deferred_mode = argv[1] == "getregs-exit";
-    let target = flag_value(&argv, "--target").unwrap_or_else(|| usage());
-    let timeout: u64 = flag_value(&argv, "--timeout")
-        .and_then(|text| text.parse().ok())
-        .unwrap_or_else(|| usage());
+    // S221: the dash splits trusted driver flags from the
+    // untrusted subject argv. Resolve it FIRST and scan only the
+    // driver side: a flag present only after `--` is the subject's
+    // argument, never driver configuration.
     let dash = argv.iter().position(|arg| arg == "--").unwrap_or_else(|| {
         cli::err_line("missing -- before subject argv");
         usage();
     });
+    let driver = &argv[..dash];
+    let target = flag_value(driver, "--target").unwrap_or_else(|| usage());
+    let timeout: u64 = flag_value(driver, "--timeout")
+        .and_then(|text| text.parse().ok())
+        .unwrap_or_else(|| usage());
     if dash + 1 >= argv.len() {
         usage();
     }

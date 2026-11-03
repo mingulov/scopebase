@@ -9,8 +9,38 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const BIN: &str = env!("CARGO_BIN_EXE_scopebase-select");
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// S229/R32: process-start nonce so a rerun under a recycled PID never
+/// collides with crash residue (which would otherwise refuse below).
+static START_NONCE: std::sync::OnceLock<u128> = std::sync::OnceLock::new();
+
+fn start_nonce() -> u128 {
+    *START_NONCE.get_or_init(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    })
+}
+
+/// S229/R32: exclusively create a private temp dir. A pre-existing
+/// candidate (preplanted symlink, stale residue) is refused loudly:
+/// silently reusing it would let a planted link redirect fixture
+/// writes outside the temp tree.
+fn claim_temp_dir(dir: &Path) {
+    match std::fs::create_dir(dir) {
+        Ok(()) => {}
+        Err(e) => panic!(
+            "refused: temp candidate {} already exists ({e})",
+            dir.display()
+        ),
+    }
+}
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -19,13 +49,15 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn workdir(tag: &str) -> PathBuf {
+    let id = TEMP_COUNTER.fetch_add(1, Ordering::SeqCst);
     let dir = std::env::temp_dir().join(format!(
-        "scopebase-select-cli-{}-{}",
+        "scopebase-select-cli-{}-{}-{}-{:x}",
         std::process::id(),
-        tag
+        id,
+        tag,
+        start_nonce()
     ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    claim_temp_dir(&dir);
     dir
 }
 
@@ -363,4 +395,42 @@ fn resolve_consumes_impact_id_for_fast_and_profile_gates() {
     let fast = &gates["fast_gates"].as_array().unwrap()[0];
     assert_eq!(fast["gate_id"], "fixture-true");
     assert_eq!(fast["id"], "fixture-true");
+}
+
+/// S229/R32 canary: a preplanted symlink at the claimed path is
+/// refused, never followed: the outside canary survives and nothing
+/// is written through the link. The old `create_dir_all` helper
+/// would have descended into the plant.
+#[test]
+fn s229_temp_claim_refuses_preplanted_symlink() {
+    let nonce = start_nonce();
+    let plant = std::env::temp_dir().join(format!(
+        "scopebase-select-cli-{}-canary-plant-{:x}",
+        std::process::id(),
+        nonce
+    ));
+    let _ = std::fs::remove_file(&plant);
+    let _ = std::fs::remove_dir_all(&plant);
+    let outside = std::env::temp_dir().join(format!(
+        "scopebase-select-cli-{}-canary-outside-{:x}",
+        std::process::id(),
+        nonce
+    ));
+    let _ = std::fs::remove_dir_all(&outside);
+    claim_temp_dir(&outside);
+    let canary = outside.join("canary.txt");
+    std::fs::write(&canary, b"canary").unwrap();
+    std::os::unix::fs::symlink(&outside, &plant).unwrap();
+    let outcome = std::panic::catch_unwind(|| claim_temp_dir(&plant));
+    assert!(
+        outcome.is_err(),
+        "preplanted symlink was claimed instead of refused"
+    );
+    assert_eq!(
+        std::fs::read(&canary).unwrap(),
+        b"canary",
+        "claim wrote through the planted link"
+    );
+    std::fs::remove_file(&plant).unwrap();
+    std::fs::remove_dir_all(&outside).unwrap();
 }

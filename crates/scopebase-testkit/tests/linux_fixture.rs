@@ -28,17 +28,45 @@ fn worker_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_scopebase-tt03-worker"))
 }
 
-fn temp_root(tag: &str) -> (PathBuf, File) {
-    let base = std::env::temp_dir().join(format!(
-        "tt03-{}-{}-{}",
-        tag,
-        std::process::id(),
+static TEMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// S229/R32: process-start nonce so a rerun under a recycled PID never
+/// collides with crash residue (which would otherwise refuse below).
+static START_NONCE: std::sync::OnceLock<u128> = std::sync::OnceLock::new();
+
+fn start_nonce() -> u128 {
+    *START_NONCE.get_or_init(|| {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    })
+}
+
+/// S229/R32: exclusively create a private temp dir. A pre-existing
+/// candidate (preplanted symlink, stale residue) is refused loudly:
+/// silently reusing it would let a planted link redirect staged
+/// worker images outside the temp tree.
+fn claim_temp_dir(dir: &std::path::Path) {
+    match std::fs::create_dir(dir) {
+        Ok(()) => {}
+        Err(e) => panic!(
+            "refused: temp candidate {} already exists ({e})",
+            dir.display()
+        ),
+    }
+}
+
+fn temp_root(tag: &str) -> (PathBuf, File) {
+    let id = TEMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let base = std::env::temp_dir().join(format!(
+        "tt03-{}-{}-{}-{:x}",
+        tag,
+        std::process::id(),
+        id,
+        start_nonce()
     ));
-    std::fs::create_dir_all(&base).unwrap();
+    claim_temp_dir(&base);
     let dir = File::open(&base).unwrap();
     (base, dir)
 }
@@ -2462,4 +2490,41 @@ fn exit_status_only_is_not_custody() {
         err.detail()
     );
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// S229/R32 canary: a preplanted symlink at the claimed path is
+/// refused, never followed: the outside canary survives and nothing
+/// is written through the link.
+#[test]
+fn s229_temp_claim_refuses_preplanted_symlink() {
+    let nonce = start_nonce();
+    let plant = std::env::temp_dir().join(format!(
+        "tt03-canary-plant-{}-{:x}",
+        std::process::id(),
+        nonce
+    ));
+    let _ = std::fs::remove_file(&plant);
+    let _ = std::fs::remove_dir_all(&plant);
+    let outside = std::env::temp_dir().join(format!(
+        "tt03-canary-outside-{}-{:x}",
+        std::process::id(),
+        nonce
+    ));
+    let _ = std::fs::remove_dir_all(&outside);
+    claim_temp_dir(&outside);
+    let canary = outside.join("canary.txt");
+    std::fs::write(&canary, b"canary").unwrap();
+    std::os::unix::fs::symlink(&outside, &plant).unwrap();
+    let outcome = std::panic::catch_unwind(|| claim_temp_dir(&plant));
+    assert!(
+        outcome.is_err(),
+        "preplanted symlink was claimed instead of refused"
+    );
+    assert_eq!(
+        std::fs::read(&canary).unwrap(),
+        b"canary",
+        "claim wrote through the planted link"
+    );
+    std::fs::remove_file(&plant).unwrap();
+    std::fs::remove_dir_all(&outside).unwrap();
 }

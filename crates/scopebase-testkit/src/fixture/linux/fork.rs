@@ -247,15 +247,52 @@ fn stat_state_pgrp(pid: libc::pid_t) -> Option<(char, libc::pid_t)> {
 /// R21-009: starttime read for the regression's
 /// birth-aware checks (fork-local — audit's helper is
 /// out of reach). `Ok(None)` is proven absence
-/// (ENOENT); anything else unreadable is `Err`.
+/// (ENOENT, or ESRCH from a reap between open and read
+/// — see `proc_entry_gone`); anything else
+/// unreadable is `Err`.
 /// Parent scope (moved up for R23-019 — the jam
 /// birth-gate stakes m2's birth pre-tail; tests reach
 /// it via `super::*` as before).
 #[cfg(test)]
+/// R24001-FLAKE01 (2026-11-02; unified with
+/// R22006-FLAKE01's `proc_entry_gone` under that name):
+/// a /proc read error means ABSENT (no task at observe)
+/// only for NotFound (entry already gone at open) and
+/// ESRCH (task reaped between open and read — zombies
+/// hold their numbers with READABLE stats, so ESRCH ⟹
+/// not even a zombie ⟹ reaped). Every other errno is
+/// unreadable-unknown (EPERM/hidepid stays loud —
+/// fail-closed preserved).
+fn proc_entry_gone(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
+}
+
+/// R24001-FLAKE01 collateral: the absent-vs-unreadable
+/// classification is planted deterministically (the
+/// mid-read reap transient cannot be staged
+/// reliably — its ERROR VALUE can).
+#[test]
+fn proc_entry_gone_maps_absence_not_unreadability() {
+    assert!(proc_entry_gone(&std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "gone at open"
+    )));
+    assert!(proc_entry_gone(&std::io::Error::from_raw_os_error(
+        libc::ESRCH
+    )));
+    assert!(!proc_entry_gone(&std::io::Error::from_raw_os_error(
+        libc::EPERM
+    )));
+    assert!(!proc_entry_gone(&std::io::Error::from_raw_os_error(
+        libc::EACCES
+    )));
+}
+
+#[cfg(test)]
 fn fork_starttime(pid: libc::pid_t) -> Result<Option<u64>, String> {
     let text = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if proc_entry_gone(&error) => return Ok(None),
         Err(error) => return Err(error.to_string()),
     };
     let after = text
@@ -2423,7 +2460,15 @@ mod tests {
             "scan backstop must find no residual sleep 853"
         );
         assert!(!outcome.timed_out, "probe must complete\n{stderr}");
-        assert!(outcome.out.status.success(), "probe must exit 0\n{stderr}");
+        // R22008-FLAKE01 diagnostic (2026-11-02): a silent
+        // nonzero probe death was observed once (empty
+        // stderr) — print the full status (signal vs code)
+        // plus both pipes so the next recurrence diagnoses.
+        assert!(
+            outcome.out.status.success(),
+            "probe must exit 0\nstatus={:?}\nstdout={stdout}\nstderr={stderr}",
+            outcome.out.status
+        );
         assert!(
             stderr.contains("R21008-FALLBACK"),
             "probe must take the fallback path\n{stderr}"
@@ -4433,9 +4478,11 @@ mod tests {
     /// plus the birth window (`tick >= anchor`). Kill
     /// paths pass a kill-time anchor. Read-error
     /// discipline mirrors `live_sleep_with_dur`
-    /// (R22-016(a)): NotFound (vanished) skips; any other
-    /// read error fails LOUD (a custody scan must never
-    /// certify absence over unreadable entries).
+    /// (R22-016(a), R22008-FLAKE01): NotFound or ESRCH
+    /// (vanished mid-scan — see `proc_entry_gone`) skips;
+    /// any other read error fails LOUD (a custody scan
+    /// must never certify absence over unreadable
+    /// entries).
     /// Production callers use this (no hook); the R23-009
     /// regression uses
     /// [`sleep_owned_pids_with_dur_with_hook`].
@@ -4467,7 +4514,10 @@ mod tests {
             }
             let cmdline = match std::fs::read(format!("/proc/{name}/cmdline")) {
                 Ok(c) => c,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                // R22008-FLAKE01: ESRCH skips with NotFound
+                // (reaped between readdir and read — the
+                // entry's task is gone, never an outage).
+                Err(error) if proc_entry_gone(&error) => continue,
                 Err(error) => {
                     panic!("custody scan: /proc/{name}/cmdline unreadable mid-scan: {error}")
                 }
@@ -4491,10 +4541,11 @@ mod tests {
                     // authenticated the replacement's tick
                     // with the former occupant's argv, then
                     // killed it). Read-error discipline as
-                    // above (NotFound skips; else LOUD).
+                    // above (NotFound/ESRCH skips; else
+                    // LOUD).
                     let cmdline2 = match std::fs::read(format!("/proc/{pid}/cmdline")) {
                         Ok(cmdline2) => cmdline2,
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(error) if proc_entry_gone(&error) => continue,
                         Err(error) => panic!(
                             "custody scan: /proc/{pid}/cmdline unreadable on re-verify: {error}"
                         ),
@@ -4930,7 +4981,9 @@ mod tests {
     /// evidence valid instead of failing the test).
     fn prove_reaped_by_absence(pid: libc::pid_t) -> Result<bool, String> {
         match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+            // XRV1-I8: ESRCH reads absent with NotFound
+            // (reaped mid-read — absence is absence).
+            Err(error) if proc_entry_gone(&error) => Ok(true),
             Err(error) => Err(error.to_string()),
             Ok(_) => Ok(false),
         }
@@ -5415,9 +5468,10 @@ mod tests {
         // N4 (R1): independent expected-identity
         // backstops (a mutant-RED StillOurs unwinds
         // through them — the failure records, nothing
-        // strands; disarmed once all three prove
-        // retired — AFTER the judge below, never
-        // before).
+        // strands); each disarms per-verdict on
+        // Gone/Recycled (XRV1-F2 murder fix — a judged
+        // birth's guard must not stay armed into a later
+        // verdict's unwind).
         let mut _b1 = LegChildGuard {
             pid: m1,
             tick: Some(t1),
@@ -5428,6 +5482,21 @@ mod tests {
             tick: Some(t2),
             disarmed: false,
         };
+        // XRV1-H4 (corrects the XRV1-G3 premise FOR THIS
+        // LEG — 006 differs, see XRV1-I4): the probe guard
+        // is RESTORED. output() reaps the WRAPPER — never
+        // cpid (the wrapper's child, our grandchild,
+        // SIGSTOPed mid-GO-wait): the probe's retirement
+        // depends on the wrapper's own unwind guards, which
+        // best-effort skip on an unreadable identity read —
+        // the wrapper can exit with the probe still
+        // stopped, orphaned to init, frozen forever. The
+        // probe is UNDECIDED at judge time (like m1/m2), so
+        // uniform undecided-birth custody applies: armed
+        // from the start (a collection panic must still
+        // retire it — R23-011 doctrine), disarmed
+        // per-verdict on Gone/Recycled (the F2 murder fix
+        // is retained).
         let mut _b3 = LegChildGuard {
             pid: cpid,
             tick: Some(ctick),
@@ -5439,8 +5508,12 @@ mod tests {
         // read would misjudge it StillOurs; the bool
         // only hurries — the proof below judges);
         // verdicts COLLECTED under settle, then judged
-        // in order (first failure panics — the backstops
-        // above retire every survivor on unwind).
+        // in order — each verdict disarms its OWN guard
+        // (a judged Gone birth has no cleanup duty left;
+        // its guard must not stay armed into a later
+        // verdict's unwind), while an UNJUDGED birth's
+        // guard stays armed (its cleanup is undecided
+        // and unwind must retire it).
         let mut verdicts = Vec::new();
         for (pid, tick, who) in [
             (m1, t1, "m1"),
@@ -5452,7 +5525,14 @@ mod tests {
         }
         for (who, pid, tick, proof) in verdicts {
             match proof {
-                ReapedProof::Gone | ReapedProof::Recycled(_) => {}
+                ReapedProof::Gone | ReapedProof::Recycled(_) => match who {
+                    "m1" => _b1.disarmed = true,
+                    "sleeper" => _b2.disarmed = true,
+                    // XRV1-H4: the probe is judged (last) —
+                    // stand its restored guard down.
+                    "probe" => _b3.disarmed = true,
+                    _ => panic!("R24005: unknown verdict birth {who}"),
+                },
                 ReapedProof::StillOurs => panic!(
                     "R24005: {who} {pid}/{tick} survives the rendezvous failure \
                      (unwind retired the probe only?)"
@@ -5462,9 +5542,6 @@ mod tests {
                 ),
             }
         }
-        _b1.disarmed = true;
-        _b2.disarmed = true;
-        _b3.disarmed = true;
     }
 
     /// R24-006: a denied rlimit snapshot must retire
@@ -5546,8 +5623,12 @@ mod tests {
         // vacancy-only).
         // N4 (R1): independent expected-identity
         // backstops (see the 005 leg — a mutant-RED
-        // StillOurs unwinds through them; disarmed
-        // AFTER the judge, never before).
+        // StillOurs unwinds through them). XRV1-F2:
+        // disarmed PER-VERDICT as each birth passes
+        // (verifiably discharged — leaving one armed
+        // murders a same-tick stranger on a LATER
+        // verdict's unwind); RED/Unreadable arms never
+        // disarm.
         let mut _b1 = LegChildGuard {
             pid: m1,
             tick: Some(t1),
@@ -5558,11 +5639,16 @@ mod tests {
             tick: Some(t2),
             disarmed: false,
         };
-        let mut _b3 = LegChildGuard {
-            pid: cpid,
-            tick: Some(ctick),
-            disarmed: false,
-        };
+        // XRV1-I4 (split from the 005 leg): NO probe
+        // guard here. 006's staging PROVES the wrapper
+        // waited cpid: the required "died before ENTER"
+        // marker prints only after the wrapper's
+        // child.wait() (its hang branch emits different
+        // text and fails staging above, before any guard
+        // arms). The probe is DISCHARGED at judge time —
+        // a probe-tick guard would carry only murder
+        // authority over a same-tick recycled stranger
+        // (G3's premise HOLDS for 006). None is armed.
         // N5 (R1): bounded birth-aware SETTLE before
         // each verdict read (see the 005 leg);
         // verdicts COLLECTED, then judged.
@@ -5572,24 +5658,163 @@ mod tests {
             (m2, t2, "sleeper"),
             (cpid, ctick, "probe"),
         ] {
-            let _ = birth_drained(pid, tick, std::time::Duration::from_secs(5));
-            verdicts.push((who, pid, tick, prove_reaped_gone_or_recycled(pid, tick)));
+            // R24006-FLAKE01 diagnostic (2026-11-02): keep the
+            // drain result — a drained-then-StillOurs flip is
+            // recycle evidence; print the child stderr (drop
+            // R22007 lines discriminate guard-path faults).
+            let drained = birth_drained(pid, tick, std::time::Duration::from_secs(5));
+            verdicts.push((
+                who,
+                pid,
+                tick,
+                drained,
+                prove_reaped_gone_or_recycled(pid, tick),
+            ));
         }
-        for (who, pid, tick, proof) in verdicts {
+        // XRV1-F2/XRV1-I4: _b1/_b2 stay armed into the
+        // judge (their births' cleanup is still
+        // undecided); each verdict disarms its OWN guard
+        // (no probe guard exists — staging proved the
+        // wrapper waited it).
+        for (who, pid, tick, drained, proof) in verdicts {
             match proof {
-                ReapedProof::Gone | ReapedProof::Recycled(_) => {}
+                ReapedProof::Gone | ReapedProof::Recycled(_) => match who {
+                    // Verifiably discharged — stand the
+                    // backstop down NOW (a later verdict's
+                    // unwind must not murder a same-tick
+                    // stranger through it).
+                    "m1" => _b1.disarmed = true,
+                    "sleeper" => _b2.disarmed = true,
+                    "probe" => {}
+                    _ => panic!("R24006: unknown verdict birth {who}"),
+                },
+                // R24006-FLAKE01 fix (2026-11-02, XRV1-F1):
+                // a same-number+same-tick suite birth in our
+                // death jiffy is tick-indistinguishable from
+                // survival (proven run 20: 3299259 hosted our
+                // m2 then reportless's m1 at tick 28212717 —
+                // spawn-exclusion proves our m2 died on
+                // time). Anchor the sleeper verdict on argv
+                // (dur 111 is this leg's alone — see the
+                // SLEEP_DUR env above): a live sleep-111
+                // occupant is unambiguously ours (RED).
+                // Anything else is UNDECIDABLE at one
+                // read (same-tick stranger, our unreaped
+                // zombie with empty cmdline, or our pre-exec
+                // birth with test-binary argv — no exec
+                // handshake excludes it) — XRV1-G4 resolves
+                // bounded below before abstaining (a lone
+                // read abandoning a live original is a
+                // custody hole); only a PERSISTENT ambiguous
+                // occupant skips, never a certified pass.
+                // Disarm on abstain: the murder risk (proven
+                // 1/40) outweighs the leak risk (a 2s+ exec
+                // stall is absurd; a genuinely-live ours
+                // carries sleep-111 and REDs above).
+                // Residual: m1/probe keep pure-tick verdicts
+                // (their argv is the shared test-binary image
+                // — no observed failure; ppid-anchoring is
+                // future work on recurrence).
+                ReapedProof::StillOurs if who == "sleeper" => {
+                    // XRV1-G4: RESOLVE before abstaining. The
+                    // undecided occupant may be transient (our
+                    // pre-exec birth about to show sleep-111,
+                    // our unreaped zombie about to drain, a
+                    // short-lived same-tick stranger) — a
+                    // single read cannot tell transient from
+                    // persistent, and abandoning a live
+                    // ORIGINAL (pre-exec, test-binary argv) is
+                    // a custody hole. Re-poll bounded (2s):
+                    // sleep-111 → genuine-survivor RED;
+                    // Gone/Recycled → resolved-pass (disarm,
+                    // keep judging); read-failed-but-live →
+                    // inconclusive panic (never a silent
+                    // skip). Only a PERSISTENT ambiguous
+                    // occupant falls through to the abstain
+                    // skip. The abstain return arms NOTHING
+                    // (XRV1-I4: _b1 already disarmed by m1's
+                    // verdict, _b2 disarmed here, and no
+                    // probe guard exists — staging proved
+                    // the wrapper waited the probe, so no
+                    // custody is outstanding).
+                    // Residual: a genuinely-live ours
+                    // stalled pre-exec past the deadline
+                    // skips instead of REDing (bounded miss —
+                    // an exec stall that long is absurd).
+                    // XRV1-H5 ADJUDICATED (pushback, 2026-11-02):
+                    // the abstain disarm STANDS — no sound
+                    // "discharge anyway" exists. m2 is not our
+                    // child (wrapper's, wrapper exited), so a
+                    // zombie occupant is init's (promptly
+                    // reaped — no action available or needed)
+                    // and a persistent live occupant is either
+                    // the stranger (owned — reportless retires
+                    // its own m1, no leak) or our pre-exec
+                    // wedged past 2s (absurd, never observed —
+                    // the only leaking case). No discriminator
+                    // separates them (ppid/cgroup/pgrp/argv
+                    // identical; wchan/fd-count probabilistic),
+                    // and a pin cannot discharge without
+                    // killing (pidfd/waitid never kill; the
+                    // birth isn't ours to reap) — any kill
+                    // reintroduces F2's PROVEN murder (1/40)
+                    // to cover a never-observed absurdity.
+                    let end = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                    let mut last: Result<Vec<u8>, std::io::Error> =
+                        std::fs::read(format!("/proc/{pid}/cmdline"));
+                    loop {
+                        match &last {
+                            Ok(cmd) if cmdline_matches_sleep_dur_exact(cmd, "111") => {
+                                panic!(
+                                    "R24006: {who} {pid}/{tick} survives the denied snapshot \
+                                     (drained={drained}, argv sleep-111 — genuine)\n{stderr}"
+                                )
+                            }
+                            _ => {}
+                        }
+                        match prove_reaped_gone_or_recycled(pid, tick) {
+                            ReapedProof::Gone | ReapedProof::Recycled(_) => {
+                                // Transient resolved: the birth
+                                // is verifiably retired —
+                                // discharge and keep judging.
+                                _b2.disarmed = true;
+                                break;
+                            }
+                            ReapedProof::StillOurs => {
+                                if last.is_err() {
+                                    panic!(
+                                        "inconclusive ({who} live but unreadable — \
+                                         refusing to certify)\n{stderr}"
+                                    );
+                                }
+                                if std::time::Instant::now() >= end {
+                                    _b2.disarmed = true;
+                                    eprintln!(
+                                        "skip: R24006-SAME-TICK-UNDECIDED {who} {pid}/{tick} \
+                                         holds no live sleep-111 birth after 2s resolve \
+                                         (cmdline {last:?}) — abstaining, not certifying"
+                                    );
+                                    return;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(20));
+                                last = std::fs::read(format!("/proc/{pid}/cmdline"));
+                            }
+                            ReapedProof::Unreadable(error) => panic!(
+                                "inconclusive ({who} unreadable: {error}) — refusing to \
+                                 certify\n{stderr}"
+                            ),
+                        }
+                    }
+                }
                 ReapedProof::StillOurs => panic!(
                     "R24006: {who} {pid}/{tick} survives the denied snapshot \
-                     (outer guard disarmed too early?)"
+                     (drained={drained})\n{stderr}"
                 ),
                 ReapedProof::Unreadable(error) => panic!(
-                    "inconclusive ({who} unreadable: {error}) — refusing to certify"
+                    "inconclusive ({who} unreadable: {error}) — refusing to certify\n{stderr}"
                 ),
             }
         }
-        _b1.disarmed = true;
-        _b2.disarmed = true;
-        _b3.disarmed = true;
     }
 
     /// R22-012: env flag selecting the hold

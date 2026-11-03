@@ -1392,6 +1392,12 @@ impl Decode for RunLimitValues {
 pub(crate) trait Decode: Sized {
     const BYTE: bool = false;
     fn decode(v: Value, l: &RunLimits) -> Result<Self, HarnessError>;
+    /// S177: direct byte decode for `BYTE` types, bypassing per-byte
+    /// `Value` materialization. Only `BYTE` types implement this.
+    fn decode_byte(byte: u8) -> Result<Self, HarnessError> {
+        let _ = byte;
+        Err(he(HarnessErrorKind::InvalidInput, "not a byte-decodable type"))
+    }
 }
 pub(crate) struct Obj(Map<String, Value>);
 impl Obj {
@@ -1471,23 +1477,22 @@ impl<T: Decode> Decode for Option<T> {
 }
 impl<T: Decode> Decode for Vec<T> {
     fn decode(v: Value, l: &RunLimits) -> Result<Self, HarnessError> {
-        let a = if T::BYTE {
+        if T::BYTE {
+            // S177: bytes decode directly, never via per-byte Values.
             let Value::String(s) = v else {
                 return Err(he(HarnessErrorKind::InvalidInput, "hex string required"));
             };
-            unhex(
+            return unhex(
                 Value::String(s),
                 l,
                 l.observation_bytes().max(l.vector_bytes()),
             )?
             .into_iter()
-            .map(Value::from)
-            .collect()
-        } else {
-            let Value::Array(a) = v else {
-                return Err(he(HarnessErrorKind::InvalidInput, "array required"));
-            };
-            a
+            .map(T::decode_byte)
+            .collect();
+        }
+        let Value::Array(a) = v else {
+            return Err(he(HarnessErrorKind::InvalidInput, "array required"));
         };
         a.into_iter().map(|v| T::decode(v, l)).collect()
     }
@@ -2081,6 +2086,9 @@ impl Decode for u8 {
         v.as_u64()
             .and_then(|x| u8::try_from(x).ok())
             .ok_or_else(|| he(HarnessErrorKind::InvalidInput, "byte"))
+    }
+    fn decode_byte(byte: u8) -> Result<Self, HarnessError> {
+        Ok(byte)
     }
 }
 pub(crate) mod decimal_list {

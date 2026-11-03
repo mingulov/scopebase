@@ -91,6 +91,15 @@ impl Error for SampleError {}
 
 /// Raw sampler output. Units: counts for fds/workers/mappings/links/attempts,
 /// bytes for retained/working/peak. Peaks must dominate their current counter.
+///
+/// S223: the bytes triple is excluded from that rule by design.
+/// `peak_bytes` is an independent high-water channel (fed by a
+/// [`PeakTracker`]-style instrument, verdict in the Memory dimension),
+/// not a peak over `retained_bytes`/`working_bytes` (verdict in the
+/// Bytes dimension). A sampler that accounts bytes but observes no
+/// peak — or reports a post-release high-water with no current
+/// holding — is coherent, not broken; cross-channel dominance would
+/// violate the dimensional independence [`violations`] enforces.
 #[derive(Clone, Debug, Default)]
 pub struct ResourceSampleValues {
     pub epoch: u64,

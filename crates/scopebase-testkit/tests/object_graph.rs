@@ -455,37 +455,102 @@ enum RelSym {
     Index(u32),
 }
 
+/// S228: context-carrying slice accessor for test ELF parsers. These
+/// helpers read production-emitted bytes; a truncated object must fail
+/// naming the helper and wanted range — never a bare `index out of
+/// bounds` with no indication of which production invariant broke.
+/// Saturating arithmetic below is fail-loud by construction: a
+/// saturated offset still misses the range check and panics here.
+fn elf_field<'b>(helper: &str, bytes: &'b [u8], at: usize, len: usize, what: &str) -> &'b [u8] {
+    match at.checked_add(len) {
+        Some(end) if end <= bytes.len() => &bytes[at..end],
+        _ => panic!(
+            "{helper}: {what} [{at}..{at}+{len}] exceeds object len {}",
+            bytes.len()
+        ),
+    }
+}
+
 fn slot_fields(bytes: &[u8], text_file_off: u64, slot: usize) -> (u8, u8, i32, i32) {
-    let at = (text_file_off + (slot * 8) as u64) as usize;
-    let code = bytes[at];
-    let regs = bytes[at + 1];
-    let imm = i32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap());
-    let next = i32::from_le_bytes(bytes[at + 12..at + 16].try_into().unwrap());
+    const H: &str = "slot_fields";
+    let at = text_file_off
+        .checked_add((slot as u64).saturating_mul(8))
+        .and_then(|sum| usize::try_from(sum).ok())
+        .unwrap_or_else(|| {
+            panic!("{H}: text offset {text_file_off}+slot {slot} exceeds address space")
+        });
+    let code = elf_field(H, bytes, at, 1, "code")[0];
+    let regs = elf_field(H, bytes, at.saturating_add(1), 1, "regs")[0];
+    let imm = i32::from_le_bytes(
+        elf_field(H, bytes, at.saturating_add(4), 4, "imm")
+            .try_into()
+            .unwrap(),
+    );
+    let next = i32::from_le_bytes(
+        elf_field(H, bytes, at.saturating_add(12), 4, "next-imm")
+            .try_into()
+            .unwrap(),
+    );
     (code, regs, imm, next)
 }
 
 fn text_file_offset(bytes: &[u8]) -> u64 {
     // Independent section walk: never trust the builder's push order.
-    let shoff = u64::from_le_bytes(bytes[0x28..0x30].try_into().unwrap());
-    let shnum = u16::from_le_bytes(bytes[0x3c..0x3e].try_into().unwrap()) as usize;
-    let shstrndx = u16::from_le_bytes(bytes[0x3e..0x40].try_into().unwrap()) as usize;
+    const H: &str = "text_file_offset";
+    let shoff = u64::from_le_bytes(
+        elf_field(H, bytes, 0x28, 8, "ehdr.shoff")
+            .try_into()
+            .unwrap(),
+    );
+    let shnum = u16::from_le_bytes(
+        elf_field(H, bytes, 0x3c, 2, "ehdr.shnum")
+            .try_into()
+            .unwrap(),
+    ) as usize;
+    let shstrndx = u16::from_le_bytes(
+        elf_field(H, bytes, 0x3e, 2, "ehdr.shstrndx")
+            .try_into()
+            .unwrap(),
+    ) as usize;
+    let shoff_at = usize::try_from(shoff).unwrap_or(usize::MAX);
     let header = |index: usize| {
-        let at = shoff as usize + index * 64;
+        let at = shoff_at.saturating_add(index.saturating_mul(64));
         (
-            u64::from_le_bytes(bytes[at + 24..at + 32].try_into().unwrap()),
-            u64::from_le_bytes(bytes[at + 32..at + 40].try_into().unwrap()),
-            u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()),
+            u64::from_le_bytes(
+                elf_field(H, bytes, at.saturating_add(24), 8, "shdr.offset")
+                    .try_into()
+                    .unwrap(),
+            ),
+            u64::from_le_bytes(
+                elf_field(H, bytes, at.saturating_add(32), 8, "shdr.size")
+                    .try_into()
+                    .unwrap(),
+            ),
+            u32::from_le_bytes(
+                elf_field(H, bytes, at, 4, "shdr.name")
+                    .try_into()
+                    .unwrap(),
+            ),
         )
     };
     let (str_off, str_size, _) = header(shstrndx);
-    let strings = &bytes[str_off as usize..(str_off + str_size) as usize];
+    let str_at = usize::try_from(str_off).unwrap_or(usize::MAX);
+    let str_len = usize::try_from(str_size).unwrap_or(usize::MAX);
+    let strings = elf_field(H, bytes, str_at, str_len, "shstrtab");
     for index in 0..shnum {
         let (off, _, name) = header(index);
-        let end = strings[name as usize..]
-            .iter()
-            .position(|b| *b == 0)
-            .unwrap();
-        if &strings[name as usize..name as usize + end] == b".text" {
+        let name_at = name as usize;
+        let tail = match strings.get(name_at..) {
+            Some(tail) => tail,
+            None => panic!(
+                "{H}: shdr[{index}].name {name_at} exceeds shstrtab len {}",
+                strings.len()
+            ),
+        };
+        let end = tail.iter().position(|b| *b == 0).unwrap_or_else(|| {
+            panic!("{H}: shdr[{index}].name {name_at} unterminated in shstrtab")
+        });
+        if &tail[..end] == b".text" {
             return off;
         }
     }
@@ -560,7 +625,15 @@ fn section_offsets_resolve_distinct_sentinel_fds() {
     }
     // Unrelocated tail (exit slot) and every non-target byte are identical.
     let tail = relocated.bytes().len() - 8;
-    assert_eq!(&relocated.bytes()[tail..], &bytes[tail..]);
+    let got = elf_field(
+        "map-reloc-tail",
+        relocated.bytes(),
+        tail,
+        relocated.bytes().len() - tail,
+        "relocated tail",
+    );
+    let want = elf_field("map-reloc-tail", &bytes, tail, got.len(), "input tail");
+    assert_eq!(got, want);
     assert_ne!(relocated.output_sha256(), admitted.sha256());
 }
 
@@ -1099,14 +1172,33 @@ fn call_graph_traversal_is_work_bounded() {
 
 #[test]
 fn call_graph_reads_emitted_objects() {
+    // S179: both objects hold one global `prog` (socket, 3 call-free
+    // slots: ldx/add/exit) — llvm-objdump/readelf truth. The graphs
+    // must carry exactly that content; an empty/wrong graph fails.
     let bytes = repo_bytes("fixtures/bpf/isa/objects/base.o");
     let graph = extract_call_graph(&bytes, &contract(), &limits()).expect("base.o graph");
-    let _ = graph;
+    assert!(graph.conforms(), "base.o decodes cleanly");
+    assert_eq!(graph.functions().len(), 1, "base.o roots");
+    let func = &graph.functions()[0];
+    assert_eq!(func.name(), "prog");
+    assert_eq!(func.section(), "socket");
+    assert_eq!((func.start(), func.len()), (0, 24));
+    assert!(func.global());
+    assert!(graph.edges().is_empty(), "base.o has no calls");
+    assert!(!graph.has_cycle());
     let bytes = repo_bytes("fixtures/bpf/isa/objects/base-be.o");
     let big =
         ObjectContract::from_json(contract_json("big").as_bytes(), &limits()).expect("contract");
     let graph = extract_call_graph(&bytes, &big, &limits()).expect("base-be.o graph");
-    let _ = graph;
+    assert!(graph.conforms(), "base-be.o decodes cleanly");
+    assert_eq!(graph.functions().len(), 1, "base-be.o roots");
+    let func = &graph.functions()[0];
+    assert_eq!(func.name(), "prog");
+    assert_eq!(func.section(), "socket");
+    assert_eq!((func.start(), func.len()), (0, 24));
+    assert!(func.global());
+    assert!(graph.edges().is_empty(), "base-be.o has no calls");
+    assert!(!graph.has_cycle());
 }
 
 #[test]
@@ -1407,4 +1499,20 @@ fn void_unlinked_and_valueless_map_linkage_refuses() {
         let error = snapshot_metadata(&bytes, &contract(), &inputs, &limits()).unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Malformed, "{map}: {error:?}");
     }
+}
+
+/// S228: a truncated `.text` must fail naming the helper and wanted
+/// range — never a bare `index out of bounds` with no indication of
+/// which production invariant broke.
+#[test]
+#[should_panic(expected = "slot_fields")]
+fn s228_slot_fields_names_truncated_range() {
+    let _ = slot_fields(&[0u8; 8], 0, 4);
+}
+
+/// S228: a truncated ELF header must fail naming the helper.
+#[test]
+#[should_panic(expected = "text_file_offset")]
+fn s228_text_file_offset_names_truncated_range() {
+    let _ = text_file_offset(&[0u8; 16]);
 }

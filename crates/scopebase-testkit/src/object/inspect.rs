@@ -54,7 +54,9 @@ pub struct FamilySpan {
     pub offset: u64,
     /// Raw opcode byte (TC04: atomic/plain shape decode over this inventory).
     pub code: u8,
-    /// Raw register byte: low nibble dst, high nibble src.
+    /// Register byte in LE nibble order (low nibble dst, high nibble
+    /// src). S178: big-endian objects store swapped nibbles (S04), so
+    /// BE bytes are normalized at span construction.
     pub regs: u8,
     /// Decoded 16-bit offset in the contract endianness.
     pub off: i16,
@@ -619,7 +621,12 @@ pub fn inspect_final_object(
                 Data::Little => i32::from_le_bytes([raw[4], raw[5], raw[6], raw[7]]),
                 Data::Big => i32::from_be_bytes([raw[4], raw[5], raw[6], raw[7]]),
             };
-            let regs = raw[1];
+            // S178: BE objects store swapped register nibbles (S04);
+            // normalize to LE order (low nibble dst, high nibble src).
+            let regs = match data {
+                Data::Little => raw[1],
+                Data::Big => raw[1].rotate_left(4),
+            };
             match classify(code, off, imm) {
                 Class::Family(family) => spans.push(FamilySpan {
                     family: family.to_owned(),

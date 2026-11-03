@@ -1487,18 +1487,55 @@ fn run_denial_driver(
     (output, start.elapsed(), dir)
 }
 
+/// R24001-FLAKE01 (2026-11-02 — closes R23-FLAKE09's
+/// exit; unified with R22006-FLAKE01's `proc_entry_gone`
+/// under that name): a /proc read error means ABSENT (no
+/// task at observe) only for NotFound (entry already
+/// gone at open) and ESRCH (task reaped between open
+/// and read — zombies hold their numbers with READABLE
+/// stats, so ESRCH ⟹ not even a zombie ⟹ reaped). Every
+/// other errno is unreadable-unknown (EPERM/hidepid
+/// stays loud — fail-closed preserved).
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn proc_entry_gone(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
+}
+
+/// R24001-FLAKE01 collateral: the absent-vs-unreadable
+/// classification is planted deterministically (the
+/// mid-read reap transient cannot be staged
+/// reliably — its ERROR VALUE can).
+#[test]
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+fn proc_entry_gone_maps_absence_not_unreadability() {
+    assert!(proc_entry_gone(&std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "gone at open"
+    )));
+    assert!(proc_entry_gone(&std::io::Error::from_raw_os_error(
+        libc::ESRCH
+    )));
+    assert!(!proc_entry_gone(&std::io::Error::from_raw_os_error(
+        libc::EPERM
+    )));
+    assert!(!proc_entry_gone(&std::io::Error::from_raw_os_error(
+        libc::EACCES
+    )));
+}
+
 /// S123-round8: starttime of a live task (field 22 of
 /// `/proc/PID/stat`). `Ok(None)` ONLY when the task is proven gone
-/// (the stat row is absent: ENOENT). Any other failure —
-/// descriptor exhaustion, permission, an unparseable row — is
-/// `Err` (UNRESOLVED): the caller must treat the task as neither
-/// live nor retired. (The old helper mapped every failure to
-/// None, which cleanup read as "already gone".)
+/// (the stat row is absent: ENOENT, or ESRCH from a reap between
+/// open and read — see `proc_entry_gone`). Any other
+/// failure — descriptor exhaustion, permission, an unparseable
+/// row — is `Err` (UNRESOLVED): the caller must treat the task as
+/// neither live nor retired. (The old helper mapped every failure
+/// to None, which cleanup read as "already gone".)
 #[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
 fn task_starttime_checked(pid: i32) -> Result<Option<u64>, String> {
     let row = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         Ok(row) => row,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if proc_entry_gone(&error) => return Ok(None),
         Err(error) => return Err(format!("task {pid} stat unreadable: {error}")),
     };
     // Fields 1 (pid) and 2 (comm) consumed with the parens;
@@ -5171,9 +5208,11 @@ fn r22007_stat_failure_discharges_through_guard_probe() {
 /// R21-008 (toolchain twin): faithful port of the lib
 /// live-sleeper scan — true when a LIVE (non-zombie)
 /// `sleep dur` exists anywhere in /proc. R22-016(a):
-/// entry / cmdline read errors other than NotFound fail
-/// LOUD (mirror of the lib fix — swallowing them is
-/// false absence over live m2). R23-008: ownership-scoped
+/// entry / cmdline read errors other than NotFound or
+/// ESRCH fail LOUD (R22008-FLAKE01: ESRCH ⟹ reaped
+/// mid-scan, skips with NotFound — see `proc_entry_gone`;
+/// swallowing the rest is false absence over live m2).
+/// R23-008: ownership-scoped
 /// (euid + session; window off — the oracle takes no
 /// anchor) but still fork-shape-exact argv0 (no basename:
 /// the R12 fallback's basename recheck keeps its meaning).
@@ -5193,7 +5232,9 @@ fn live_sleep_with_dur(dur: &str) -> bool {
         }
         let cmdline = match std::fs::read(format!("/proc/{name}/cmdline")) {
             Ok(c) => c,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            // R22008-FLAKE01: ESRCH skips with NotFound
+            // (reaped between readdir and read).
+            Err(error) if proc_entry_gone(&error) => continue,
             Err(error) => panic!("/proc/{name}/cmdline unreadable mid-scan: {error}"),
         };
         let mut args = cmdline.split(|b| *b == 0);
@@ -5210,7 +5251,9 @@ fn live_sleep_with_dur(dur: &str) -> bool {
             continue;
         }
         match std::fs::read_to_string(format!("/proc/{name}/stat")) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            // XRV1-I8: ESRCH skips with NotFound (reaped
+            // between the cmdline and stat reads).
+            Err(error) if proc_entry_gone(&error) => continue,
             Err(error) => panic!("/proc/{name}/stat unreadable mid-scan: {error}"),
             Ok(text) => {
                 let state = text
@@ -5486,7 +5529,9 @@ fn sleep_owned_pids_with_dur_with_hook(
         }
         let cmdline = match std::fs::read(format!("/proc/{name}/cmdline")) {
             Ok(c) => c,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            // R22008-FLAKE01: ESRCH skips with NotFound
+            // (reaped between readdir and read).
+            Err(error) if proc_entry_gone(&error) => continue,
             Err(error) => {
                 panic!("custody scan: /proc/{name}/cmdline unreadable mid-scan: {error}")
             }
@@ -5515,10 +5560,10 @@ fn sleep_owned_pids_with_dur_with_hook(
                 // authenticated the replacement's tick with
                 // the former occupant's argv, then killed
                 // it). Read-error discipline as above
-                // (NotFound skips; else LOUD).
+                // (NotFound/ESRCH skips; else LOUD).
                 let cmdline2 = match std::fs::read(format!("/proc/{pid}/cmdline")) {
                     Ok(cmdline2) => cmdline2,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) if proc_entry_gone(&error) => continue,
                     Err(error) => {
                         panic!("custody scan: /proc/{pid}/cmdline unreadable on re-verify: {error}")
                     }
@@ -5610,7 +5655,9 @@ fn scan_owned_publishers_with_dur(dur: &str, anchor: u64) -> Vec<(i32, u64)> {
         }
         let cmdline = match std::fs::read(format!("/proc/{name}/cmdline")) {
             Ok(c) => c,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            // R22008-FLAKE01: ESRCH skips with NotFound
+            // (reaped between readdir and read).
+            Err(error) if proc_entry_gone(&error) => continue,
             Err(error) => {
                 panic!("custody scan: /proc/{name}/cmdline unreadable mid-scan: {error}")
             }
@@ -5626,7 +5673,7 @@ fn scan_owned_publishers_with_dur(dur: &str, anchor: u64) -> Vec<(i32, u64)> {
             Ok(Some(tick)) => {
                 let cmdline2 = match std::fs::read(format!("/proc/{pid}/cmdline")) {
                     Ok(cmdline2) => cmdline2,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) if proc_entry_gone(&error) => continue,
                     Err(error) => {
                         panic!("custody scan: /proc/{pid}/cmdline unreadable on re-verify: {error}")
                     }
@@ -22590,10 +22637,17 @@ fn survivor_cleanup_uses_no_numeric_kill_on_nonchild() {
         return;
     }
     assert_eq!(code, 10, "trapped cleanup must retire via pins");
+    // R19015-FLAKE04 (2026-11-02): the probe's poll_pin_retired
+    // already proved death+reap through the pin; across the
+    // probe/wait gap an ambient suite spawn may recycle the number
+    // (observed 1/2 full-suite runs: Ok(false) on a live stranger).
+    // Assert tick-bound retirement (gone OR foreign tick via the
+    // proven orphan_retired_checked predicate), never a number-only
+    // presence read — the FLAKE02 class.
     assert_eq!(
-        task_retired_checked(pid),
+        orphan_retired_checked(pid, pinned),
         Ok(true),
-        "orphan survivor must be retired"
+        "orphan survivor must be retired (gone or recycled)"
     );
 }
 
@@ -22998,4 +23052,45 @@ fn timeout_under_denial_retires_bounded() {
     );
     kill_survivors(&stdout);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// S221: a driver flag present ONLY after `--` must not configure the
+/// driver. The subject argv is untrusted: `--timeout` after the dash
+/// is the tool's argument, not the driver's, so the run refuses
+/// usage (exit 2) instead of silently adopting `99`.
+/// Pre-fix the driver scanned the whole argv and ran with 99.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn s221_invoke_denial_ignores_post_dash_timeout() {
+    let dir = std::env::temp_dir().join(format!(
+        "tc02-s221-dash-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let closure_path = dir.join("closure.json");
+    std::fs::write(&closure_path, valid_closure()).unwrap();
+    let tool = fake_tool("echo-argv");
+    let driver = PathBuf::from(env!("CARGO_BIN_EXE_scopebase-tc02-invoke-denial"));
+    let output = std::process::Command::new(&driver)
+        .arg("--tool")
+        .arg(&tool)
+        .arg("--closure")
+        .arg(&closure_path)
+        .arg("--")
+        .arg(&tool)
+        .arg("--timeout")
+        .arg("99")
+        .output()
+        .expect("denial driver runs");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "post-dash --timeout must not configure the driver: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

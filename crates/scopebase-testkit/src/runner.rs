@@ -45,8 +45,12 @@ impl Decode for ScriptScalar {
             Some("bytes") => {
                 let mut o = Obj::new(v, &["kind", "hex"])?;
                 let _: String = o.get("kind", l)?;
-                let hex: Vec<u8> = o.get("hex", l)?;
-                bound(hex.len(), l.scalar_bytes(), "scalar bytes")?;
+                // S177: the scalar bound trips BEFORE the hex bytes
+                // materialize: length-check the hex text, then decode
+                // under the scalar cap (not the wider vector cap).
+                let hex_text: String = o.get("hex", l)?;
+                bound(hex_text.len() / 2, l.scalar_bytes(), "scalar bytes")?;
+                let hex = unhex(Value::String(hex_text), l, l.scalar_bytes())?;
                 Ok(Self::Bytes { hex })
             }
             _ => Err(he(HarnessErrorKind::UnsupportedSchema, "scalar kind")),

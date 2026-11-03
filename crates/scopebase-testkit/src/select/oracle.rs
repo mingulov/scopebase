@@ -158,16 +158,20 @@ pub fn expected_selection(
         ) {
             let case = &catalog.cases[&(case_id.clone(), case_version)];
             for cell in &case.required_cells {
-                if selected.len() == limits.max_selected_cells {
+                // S222: the cap counts distinct cells, like the
+                // selector's guard — a key already present (one cell
+                // reachable via two owners) consumes no new capacity.
+                let key = CellKey {
+                    case_id: case_id.clone(),
+                    case_version,
+                    cell_id: cell.clone(),
+                };
+                if selected.len() == limits.max_selected_cells && !selected.contains(&key) {
                     return Err(SelectionError(
                         super::selector::SelectionErrorKind::LimitExceeded,
                     ));
                 }
-                selected.insert(CellKey {
-                    case_id: case_id.clone(),
-                    case_version,
-                    cell_id: cell.clone(),
-                });
+                selected.insert(key);
             }
         }
     }
@@ -179,16 +183,18 @@ pub fn expected_selection(
         ) {
             let case = &catalog.cases[&(case_id.clone(), case_version)];
             for cell in &case.required_cells {
-                if selected.len() == limits.max_selected_cells {
+                // S222: same distinct-cell guard as the profile loop.
+                let key = CellKey {
+                    case_id: case_id.clone(),
+                    case_version,
+                    cell_id: cell.clone(),
+                };
+                if selected.len() == limits.max_selected_cells && !selected.contains(&key) {
                     return Err(SelectionError(
                         super::selector::SelectionErrorKind::LimitExceeded,
                     ));
                 }
-                selected.insert(CellKey {
-                    case_id: case_id.clone(),
-                    case_version,
-                    cell_id: cell.clone(),
-                });
+                selected.insert(key);
             }
         }
     }

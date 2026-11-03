@@ -224,6 +224,49 @@ fn term_disposition_default() -> bool {
     })
 }
 
+/// S220: apply one chunk to a blob under assembly. Latches the
+/// declared total/digest on first sight, enforces contiguity,
+/// refuses overruns past the declared total (a silent overrun
+/// would skip digest verification forever — length can never
+/// return to `== total`), and verifies the digest exactly at
+/// completion. Returns whether the blob just completed. Lengths
+/// compare in `usize` (no `u32` truncation); completion implies
+/// `len <= total <= 65_536`, so the caller's `next_offset as u32`
+/// below is exact.
+fn apply_chunk_data(blob: &mut Blob, prefix: &FragmentPrefix, chunk: &[u8]) -> Result<bool, String> {
+    match blob.total {
+        None => {
+            blob.total = Some(prefix.total_bytes);
+            blob.digest = Some(prefix.whole_sha256);
+        }
+        Some(total) if total == prefix.total_bytes && blob.digest == Some(prefix.whole_sha256) => {}
+        _ => return Err("chunk contradicts declared blob".to_string()),
+    }
+    if prefix.offset as usize != blob.data.len() {
+        return Err("chunk offset is not contiguous".to_string());
+    }
+    // Self-review: refuse BEFORE appending — an overrun must leave
+    // `len <= total` so the blob stays usable and growth stays
+    // bounded however many refusing chunks arrive.
+    let grown = blob
+        .data
+        .len()
+        .checked_add(chunk.len())
+        .filter(|grown| *grown <= prefix.total_bytes as usize);
+    if grown.is_none() {
+        return Err("chunk overruns declared total".to_string());
+    }
+    blob.data.extend_from_slice(chunk);
+    if blob.data.len() == prefix.total_bytes as usize {
+        if sha256_of(&blob.data) != prefix.whole_sha256 {
+            return Err("blob digest mismatch".to_string());
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+
 impl Worker {
     fn send(
         &mut self,
@@ -1130,24 +1173,7 @@ impl Worker {
             return Err("blob exceeds file byte ceiling".to_string());
         }
         let blob = &mut self.blobs[prefix.index as usize - 1];
-        match blob.total {
-            None => {
-                blob.total = Some(prefix.total_bytes);
-                blob.digest = Some(prefix.whole_sha256);
-            }
-            Some(total)
-                if total == prefix.total_bytes && blob.digest == Some(prefix.whole_sha256) => {}
-            _ => return Err("chunk contradicts declared blob".to_string()),
-        }
-        if prefix.offset as usize != blob.data.len() {
-            return Err("chunk offset is not contiguous".to_string());
-        }
-        blob.data.extend_from_slice(&payload[48..]);
-        if blob.data.len() as u32 == prefix.total_bytes {
-            if sha256_of(&blob.data) != prefix.whole_sha256 {
-                return Err("blob digest mismatch".to_string());
-            }
-        }
+        apply_chunk_data(blob, &prefix, &payload[48..])?;
         self.charges.file_work_bytes += prefix.chunk_bytes as u64;
         let ack = InputChunkAck {
             blob_index: prefix.index,
@@ -1324,4 +1350,77 @@ fn main() {
         armed: None,
     };
     serve_forever(&mut worker);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn prefix(total: u32, offset: u32, digest: [u8; 32]) -> FragmentPrefix {
+        FragmentPrefix {
+            index: 1,
+            total_bytes: total,
+            offset,
+            chunk_bytes: 0,
+            whole_sha256: digest,
+        }
+    }
+
+    /// S220: a chunk overrunning the declared total refuses —
+    /// silently growing past it would skip digest verification
+    /// forever (length can never return to `== total`).
+    /// Self-review: the refusal must not append first — after the
+    /// refusing chunk `len <= total` still holds, and a second
+    /// contiguous chunk refuses again without growing.
+    #[test]
+    fn chunk_overrun_refuses() {
+        let mut blob = Blob::empty();
+        let digest = sha256_of(b"abcd");
+        let err = apply_chunk_data(&mut blob, &prefix(4, 0, digest), b"abcde").unwrap_err();
+        assert!(err.contains("overrun"), "unexpected: {err}");
+        assert!(
+            blob.data.len() <= 4,
+            "refusal must not grow past total: {}",
+            blob.data.len()
+        );
+        let err = apply_chunk_data(&mut blob, &prefix(4, 0, digest), b"vwxyz").unwrap_err();
+        assert!(err.contains("overrun"), "unexpected: {err}");
+        assert!(
+            blob.data.len() <= 4,
+            "second refusal must not grow: {}",
+            blob.data.len()
+        );
+        // The blob is not poisoned: exact bytes still complete.
+        assert_eq!(
+            apply_chunk_data(&mut blob, &prefix(4, 0, digest), b"abcd"),
+            Ok(true)
+        );
+    }
+
+    /// S220: exact completion verifies the digest; partial
+    /// assembly defers it; contradictions and gaps still refuse.
+    #[test]
+    fn chunk_assembly_lifecycle() {
+        let digest = sha256_of(b"abcdefgh");
+        let mut blob = Blob::empty();
+        assert_eq!(
+            apply_chunk_data(&mut blob, &prefix(8, 0, digest), b"abcd"),
+            Ok(false)
+        );
+        assert_eq!(blob.data, b"abcd");
+        // Gap refuses.
+        assert!(apply_chunk_data(&mut blob, &prefix(8, 6, digest), b"gh").is_err());
+        // Contradicting total refuses.
+        assert!(apply_chunk_data(&mut blob, &prefix(9, 4, digest), b"efgh").is_err());
+        // Exact completion verifies.
+        assert_eq!(
+            apply_chunk_data(&mut blob, &prefix(8, 4, digest), b"efgh"),
+            Ok(true)
+        );
+        // Digest mismatch at completion refuses.
+        let mut blob = Blob::empty();
+        let wrong = sha256_of(b"xxxxxxxx");
+        let err = apply_chunk_data(&mut blob, &prefix(8, 0, wrong), b"abcdefgh").unwrap_err();
+        assert!(err.contains("digest"), "unexpected: {err}");
+    }
 }

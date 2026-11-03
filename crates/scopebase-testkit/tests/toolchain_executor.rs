@@ -56,12 +56,42 @@ struct TempDir {
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// S229/R32: process-start nonce so a rerun under a recycled PID never
+/// collides with crash residue (which would otherwise refuse below).
+static START_NONCE: std::sync::OnceLock<u128> = std::sync::OnceLock::new();
+
+fn start_nonce() -> u128 {
+    *START_NONCE.get_or_init(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    })
+}
+
+/// S229/R32: exclusively create a private temp dir. A pre-existing
+/// candidate (preplanted symlink, stale residue) is refused loudly:
+/// silently reusing it would let a planted link redirect build writes
+/// outside the temp tree.
+fn claim_temp_dir(dir: &std::path::Path) {
+    match std::fs::create_dir(dir) {
+        Ok(()) => {}
+        Err(e) => panic!(
+            "refused: temp candidate {} already exists ({e})",
+            dir.display()
+        ),
+    }
+}
+
 impl TempDir {
     fn named(tag: &str) -> Self {
         let id = TEMP_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let path = std::env::temp_dir().join(format!("tc02exec-{}-{tag}-{id}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "tc02exec-{}-{tag}-{id}-{:x}",
+            std::process::id(),
+            start_nonce()
+        ));
+        claim_temp_dir(&path);
         Self { path }
     }
 
@@ -2261,4 +2291,78 @@ fn run_pinned_max_timeout_is_honored_without_panic() {
     )
     .unwrap();
     assert!(out.success(), "MAX timeout must still run the tool");
+}
+
+/// S224: the steady-state half of hash-pinned-before-use. Bytes
+/// corrupted after pin selection refuse at admission, before any
+/// spawn — the hash is re-verified on every start. (The live-swap
+/// race between hash and exec is the documented tool-dir-immutable
+/// trust assumption in `DirectScope::start`, not covered here: no
+/// deterministic test can hit a ~40-line window without injection.)
+#[test]
+fn s224_direct_corrupt_tool_refuses_before_spawn() {
+    let dir = TempDir::named("direct-corrupt");
+    let tool = dir.join("tool");
+    std::fs::copy(fake_tool("record-build"), &tool).unwrap();
+    let lib = fake_lib_llvm(&dir, "libLLVM.so");
+    let manifest = manifest_of(&[
+        pin_json("direct-llc", "backend", "23.1.2", &tool),
+        pin_json("direct-libllvm", "backend", "23.1.2", &lib),
+    ]);
+    let selection = RoleSelection {
+        llc: Some(binding("direct-llc", &tool, b"fake direct tool")),
+        loaded_llvm: Some(binding("direct-libllvm", &lib, b"fake libLLVM")),
+        ..RoleSelection::none()
+    };
+    let tools = SelectedClosure::select(&manifest, &selection).unwrap();
+    // Corrupt AFTER pinning: the steady-state swap the hash catches.
+    std::fs::write(&tool, b"tampered-bytes-not-the-tool").unwrap();
+    let mut executor = direct_executor();
+    let source = make_source(&dir);
+    let marker = dir.join("marker");
+    let mut request = request_in(&source, &dir.join("out"));
+    request.environment.insert(
+        OsString::from("TC02_SPAWN_MARKER"),
+        marker.clone().into_os_string(),
+    );
+    let outcome = compile_fixture(&mut executor, &tools, &request);
+    assert_rejected(outcome, ErrorKind::InvalidInput, Stage::Admission);
+    assert!(!marker.exists(), "corrupt tool refuses before spawn");
+}
+
+/// S229/R32 canary: a preplanted symlink at the claimed path is
+/// refused, never followed: the outside canary survives and nothing
+/// is written through the link.
+#[test]
+fn s229_temp_claim_refuses_preplanted_symlink() {
+    let nonce = start_nonce();
+    let plant = std::env::temp_dir().join(format!(
+        "tc02exec-{}-canary-plant-{:x}",
+        std::process::id(),
+        nonce
+    ));
+    let _ = std::fs::remove_file(&plant);
+    let _ = std::fs::remove_dir_all(&plant);
+    let outside = std::env::temp_dir().join(format!(
+        "tc02exec-{}-canary-outside-{:x}",
+        std::process::id(),
+        nonce
+    ));
+    let _ = std::fs::remove_dir_all(&outside);
+    claim_temp_dir(&outside);
+    let canary = outside.join("canary.txt");
+    std::fs::write(&canary, b"canary").unwrap();
+    std::os::unix::fs::symlink(&outside, &plant).unwrap();
+    let outcome = std::panic::catch_unwind(|| claim_temp_dir(&plant));
+    assert!(
+        outcome.is_err(),
+        "preplanted symlink was claimed instead of refused"
+    );
+    assert_eq!(
+        std::fs::read(&canary).unwrap(),
+        b"canary",
+        "claim wrote through the planted link"
+    );
+    std::fs::remove_file(&plant).unwrap();
+    std::fs::remove_dir_all(&outside).unwrap();
 }

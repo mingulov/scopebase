@@ -515,6 +515,51 @@ fn atomic_xchg(endian: Endian, dst: u8, src: u8, off: i16) -> [u8; 8] {
     insn(endian, 0xDB, endian.regs(dst, src), off, 0xe1)
 }
 
+/// S178: minimal big-endian object — plain init store, atomic
+/// fetch-add32, exit — in one executable section.
+fn be_atomic_object() -> Vec<u8> {
+    let endian = Endian::Big;
+    let mut obj = ObjBuilder::new(endian);
+    let mut text = Vec::new();
+    text.extend_from_slice(&stxw_frame(endian, 1, -4));
+    text.extend_from_slice(&atomic_fetch_add32(endian, 10, 1, -4));
+    text.extend_from_slice(&exit(endian));
+    let text_idx = obj.section("uprobe", SHT_PROGBITS, SHF_EXECINSTR, text);
+    obj.func("test", true, text_idx, 0, 24);
+    obj.build()
+}
+
+#[test]
+fn be_atomic_regs_decode_dst_src_unswapped() {
+    // S178: BE objects store swapped register nibbles (S04, mirrored
+    // by Endian::regs); the inspector normalizes spans so LE-order
+    // decoders report dst/src correctly. Pre-fix the atomic slot
+    // reports dst=1,src=0 and the init base reads 1.
+    use scopebase_testkit::object::{decode_atomic, decode_plain_access};
+    let bytes = be_atomic_object();
+    let inspection =
+        inspect_final_object(&bytes, &contract_big(), &limits()).expect("be object inspects");
+    let spans = inspection.spans();
+    let atomic = spans
+        .iter()
+        .find(|s| s.offset == 8)
+        .expect("atomic slot span");
+    let insn =
+        decode_atomic(atomic.code, atomic.off, atomic.imm, atomic.regs).expect("atomic decodes");
+    assert_eq!((insn.dst, insn.src), (10, 1));
+    assert_eq!(insn.off, -4);
+    assert!(insn.fetch);
+    let plain = spans
+        .iter()
+        .find(|s| s.offset == 0)
+        .expect("init slot span");
+    let access =
+        decode_plain_access(plain.code, plain.off, plain.imm, plain.regs).expect("plain decodes");
+    assert_eq!(access.base, 10);
+    assert_eq!(access.off, -4);
+    assert!(access.write);
+}
+
 /// `ld_imm64` wide load: two slots, second slot zero.
 fn ldimm64(endian: Endian, dst: u8, imm: i32) -> [u8; 16] {
     let mut wide = [0u8; 16];
@@ -816,48 +861,119 @@ fn dead_reloc_is_dropped_and_live_reloc_is_remapped() {
     assert_eq!(survivors, vec![(0u64, "NATIVE".to_owned())]);
 }
 
+/// S228: context-carrying slice accessor for test ELF parsers. These
+/// helpers read production-emitted bytes; a truncated object must fail
+/// naming the helper and wanted range — never a bare `index out of
+/// bounds` with no indication of which production invariant broke.
+/// Saturating arithmetic below is fail-loud by construction: a
+/// saturated offset still misses the range check and panics here.
+fn elf_field<'b>(helper: &str, bytes: &'b [u8], at: usize, len: usize, what: &str) -> &'b [u8] {
+    match at.checked_add(len) {
+        Some(end) if end <= bytes.len() => &bytes[at..end],
+        _ => panic!(
+            "{helper}: {what} [{at}..{at}+{len}] exceeds object len {}",
+            bytes.len()
+        ),
+    }
+}
+
 /// Collect `(offset, symbol-name)` rows for one reloc type across every
 /// REL section of a little-endian test object.
 fn count_relocs(bytes: &[u8], want: u32) -> Vec<(u64, String)> {
-    let shoff = u64::from_le_bytes(bytes[0x28..0x30].try_into().unwrap()) as usize;
-    let shnum = u16::from_le_bytes(bytes[0x3c..0x3e].try_into().unwrap()) as usize;
+    const H: &str = "count_relocs";
+    let shoff = u64::from_le_bytes(
+        elf_field(H, bytes, 0x28, 8, "ehdr.shoff")
+            .try_into()
+            .unwrap(),
+    );
+    let shnum = u16::from_le_bytes(
+        elf_field(H, bytes, 0x3c, 2, "ehdr.shnum")
+            .try_into()
+            .unwrap(),
+    ) as usize;
+    let shoff_at = usize::try_from(shoff).unwrap_or(usize::MAX);
+    // A 64-byte header slice: sub-slices below are safe by construction.
+    let header_at = |index: usize| {
+        elf_field(
+            H,
+            bytes,
+            shoff_at.saturating_add(index.saturating_mul(64)),
+            64,
+            "shdr",
+        )
+    };
     let mut sym_names = Vec::new();
     let mut sym_off = 0usize;
     let mut sym_len = 0usize;
     let mut str_off = 0usize;
     for index in 0..shnum {
-        let header = &bytes[shoff + index * 64..shoff + (index + 1) * 64];
+        let header = header_at(index);
         let shtype = u32::from_le_bytes(header[4..8].try_into().unwrap());
         if shtype == SHT_SYMTAB {
-            sym_off = u64::from_le_bytes(header[24..32].try_into().unwrap()) as usize;
-            sym_len = u64::from_le_bytes(header[32..40].try_into().unwrap()) as usize;
+            // External R1-4: checked conversions — `as usize` would
+            // wrap a hostile high offset onto valid low bytes on
+            // 32-bit, bypassing the range check below.
+            sym_off = usize::try_from(u64::from_le_bytes(
+                header[24..32].try_into().unwrap(),
+            ))
+            .unwrap_or(usize::MAX);
+            sym_len = usize::try_from(u64::from_le_bytes(
+                header[32..40].try_into().unwrap(),
+            ))
+            .unwrap_or(usize::MAX);
             let link = u32::from_le_bytes(header[40..44].try_into().unwrap()) as usize;
-            let str_header = &bytes[shoff + link * 64..shoff + (link + 1) * 64];
-            str_off = u64::from_le_bytes(str_header[24..32].try_into().unwrap()) as usize;
+            let str_header = header_at(link);
+            str_off = usize::try_from(u64::from_le_bytes(
+                str_header[24..32].try_into().unwrap(),
+            ))
+            .unwrap_or(usize::MAX);
         }
     }
-    for entry in bytes[sym_off..sym_off + sym_len].chunks_exact(24) {
+    let symtab = elf_field(H, bytes, sym_off, sym_len, "symtab");
+    let strtab = elf_field(H, bytes, str_off, bytes.len().saturating_sub(str_off), "strtab");
+    for entry in symtab.chunks_exact(24) {
         let name = u32::from_le_bytes(entry[0..4].try_into().unwrap()) as usize;
-        let end = bytes[str_off + name..]
-            .iter()
-            .position(|byte| *byte == 0)
-            .unwrap();
-        sym_names
-            .push(String::from_utf8(bytes[str_off + name..str_off + name + end].to_vec()).unwrap());
+        let tail = match strtab.get(name..) {
+            Some(tail) => tail,
+            None => panic!("{H}: symtab name {name} exceeds strtab len {}", strtab.len()),
+        };
+        let end = tail.iter().position(|byte| *byte == 0).unwrap_or_else(|| {
+            panic!("{H}: symtab name {name} unterminated in strtab")
+        });
+        sym_names.push(
+            String::from_utf8(tail[..end].to_vec())
+                .unwrap_or_else(|_| panic!("{H}: symtab name {name} is not UTF-8")),
+        );
     }
     let mut rows = Vec::new();
     for index in 0..shnum {
-        let header = &bytes[shoff + index * 64..shoff + (index + 1) * 64];
+        let header = header_at(index);
         if u32::from_le_bytes(header[4..8].try_into().unwrap()) != SHT_REL {
             continue;
         }
-        let off = u64::from_le_bytes(header[24..32].try_into().unwrap()) as usize;
-        let len = u64::from_le_bytes(header[32..40].try_into().unwrap()) as usize;
-        for entry in bytes[off..off + len].chunks_exact(16) {
+        let off = usize::try_from(u64::from_le_bytes(
+            header[24..32].try_into().unwrap(),
+        ))
+        .unwrap_or(usize::MAX);
+        let len = usize::try_from(u64::from_le_bytes(
+            header[32..40].try_into().unwrap(),
+        ))
+        .unwrap_or(usize::MAX);
+        let rel = elf_field(H, bytes, off, len, "rel section");
+        for entry in rel.chunks_exact(16) {
             let offset = u64::from_le_bytes(entry[0..8].try_into().unwrap());
             let info = u64::from_le_bytes(entry[8..16].try_into().unwrap());
             if (info & 0xffff_ffff) as u32 == want {
-                rows.push((offset, sym_names[(info >> 32) as usize].clone()));
+                // External R1-4: a wrapped symbol index could name a
+                // valid entry instead of failing loud.
+                let sym = usize::try_from(info >> 32).unwrap_or(usize::MAX);
+                let name = sym_names.get(sym).unwrap_or_else(|| {
+                    panic!(
+                        "{H}: reloc symbol {sym} exceeds symtab names {}",
+                        sym_names.len()
+                    )
+                });
+                rows.push((offset, name.clone()));
             }
         }
     }
@@ -921,6 +1037,11 @@ fn prune_preserves_btf_without_removed_names() {
 }
 
 fn contains_slice(haystack: &[u8], needle: &[u8]) -> bool {
+    // S227: fail with the helper's message, not windows(0) internals.
+    assert!(
+        !needle.is_empty(),
+        "contains_slice needle must be non-empty"
+    );
     haystack
         .windows(needle.len())
         .any(|window| window == needle)
@@ -3445,4 +3566,21 @@ fn repair_index_refusal_precedes_allocation() {
             && gross < REPAIR_ALLOC_PIN + ALLOC_TOLERANCE,
         "refused run must not allocate the refused index: gross={gross}, pin={REPAIR_ALLOC_PIN}"
     );
+}
+
+/// S227: an empty needle must fail with the helper's message, not
+/// `windows(0)` panic internals. A future emptied-fixture caller gets
+/// a naming failure instead of an abort in slice machinery.
+#[test]
+#[should_panic(expected = "contains_slice needle must be non-empty")]
+fn s227_contains_slice_rejects_empty_needle() {
+    let _ = contains_slice(b"haystack", b"");
+}
+
+/// S228: a truncated object must fail naming the helper and wanted
+/// range — never a bare `index out of bounds` in reloc inventory.
+#[test]
+#[should_panic(expected = "count_relocs")]
+fn s228_count_relocs_names_truncated_range() {
+    let _ = count_relocs(&[0u8; 16], R_BPF_64_64);
 }

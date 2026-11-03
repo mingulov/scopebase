@@ -7389,6 +7389,14 @@ mod tests {
         // NotOurs falls through to the existing gone/recycle
         // logic (which handles those correctly).
         let mut shed_skipped = false;
+        // XRV1-F3: reap authority tracks SIGNALING, not the
+        // shed screen — pin failure and pre-kill
+        // unreadable also bypass the kill (below) with
+        // shed_skipped false. Only a frame that issued
+        // its kill may wait (its zombie is provably the
+        // signaled birth).
+        use std::os::unix::io::FromRawFd as _;
+        let mut signaled = false;
         if !want.is_empty() {
             match reverify_pipe_holdership(pid, started, want, screen_budget, screen_spent) {
                 HoldVerdict::Holds => {}
@@ -7475,16 +7483,42 @@ mod tests {
         if pin >= 0 && !shed_skipped {
             match proc_starttime(pid) {
                 Ok(Some(now)) if now == started => {
-                    // SAFETY: pidfd_send_signal(pidfd,
-                    // SIGKILL, NULL, 0).
-                    unsafe {
-                        libc::syscall(
-                            libc::SYS_pidfd_send_signal,
-                            pin as libc::c_long,
-                            libc::SIGKILL as libc::c_long,
-                            0 as libc::c_long,
-                            0 as libc::c_long,
-                        );
+                    // XRV1-H1: never signal a birth that is
+                    // ALREADY a zombie — its status is
+                    // pre-owned (proven: pidfd SIGKILL
+                    // succeeds on an unreaped exit-42 child
+                    // while its status stays exit 42 — a
+                    // kill-nop success would grant reap
+                    // authority over a concurrent owner's
+                    // status). Zombie-at-signal stays
+                    // observe-only without sending.
+                    if proc_state(pid) == Some('Z') {
+                        signaled = false;
+                    } else {
+                        // SAFETY: pidfd_send_signal(pidfd,
+                        // SIGKILL, NULL, 0).
+                        let sent = unsafe {
+                            libc::syscall(
+                                libc::SYS_pidfd_send_signal,
+                                pin as libc::c_long,
+                                libc::SIGKILL as libc::c_long,
+                                0 as libc::c_long,
+                                0 as libc::c_long,
+                            )
+                        };
+                        // XRV1-G1: reap authority needs a
+                        // SUCCESSFUL signal — a failed send
+                        // (EPERM denial, ESRCH race) signaled
+                        // nothing, so a zombie later bearing
+                        // our tick belongs to whoever actually
+                        // killed it; waiting would steal their
+                        // status. Failed attempts stay
+                        // observe-only. (The kill-nop
+                        // residual is closed below: the
+                        // pre-signal zombie check above plus
+                        // the peek-gated reap in the await —
+                        // only a SIGNALED death is consumed.)
+                        signaled = sent == 0;
                     }
                 }
                 // R18-002: gone keeps the pre-kill union
@@ -7503,8 +7537,14 @@ mod tests {
                     kids.clear();
                 }
             }
+            // XRV1-H1: the await's peek-gated reap needs the
+            // pin (a birth-held waitid peek) — keep it iff
+            // this frame signaled (closed after the await
+            // loop below); every unsignaled path closes here.
             // SAFETY: pin owned by this scope.
-            unsafe { libc::close(pin) };
+            if !signaled {
+                unsafe { libc::close(pin) };
+            }
         } else if shed_skipped && pin >= 0 {
             // R21-003: the skip path bypassed the kill but
             // still owns the pin — close it (fd leak
@@ -7512,6 +7552,21 @@ mod tests {
             // SAFETY: pin owned by this scope.
             unsafe { libc::close(pin) };
         }
+        // XRV1-I7: the kept pin (signaled path) must survive
+        // a snapshot() panic in the await loop below — hold
+        // it in RAII (drop closes). The raw `pin` int stays
+        // usable for the peek/wait syscalls but must NEVER be
+        // closed manually again — OwnedFd owns it now.
+        // (`signaled` implies `pin >= 0`: it is set only
+        // inside the `pin >= 0` arm above.)
+        let _pin_kept: Option<std::os::unix::io::OwnedFd> = if signaled {
+            debug_assert!(pin >= 0);
+            // SAFETY: pin owned by this scope; ownership
+            // moves into the guard here.
+            Some(unsafe { std::os::unix::io::OwnedFd::from_raw_fd(pin) })
+        } else {
+            None
+        };
         // Await the stray's death, unioning a fresh
         // snapshot per poll (IR1 gate shape: absence
         // and reuse certify WITHOUT waiting; unreadable
@@ -7519,10 +7574,12 @@ mod tests {
         // shed-skipped child was never signaled — awaiting
         // its death burns the whole shared deadline and
         // strands every later sibling behind the expired
-        // entry gate. One poll only (reap a zombie +
-        // observe once): a shed-then-exited child still
-        // retires cleanly, while a still-live shedder
-        // reports surviving WITHOUT consuming the
+        // entry gate. One poll only, observe WITHOUT
+        // waiting (XRV1-F3: reaping a never-signaled child
+        // steals whatever zombie holds the number — a
+        // shed-then-exited child is discharged by its
+        // owner's guards, never here), while a still-live
+        // shedder reports surviving WITHOUT consuming the
         // family's budget.
         if !pid_gone {
             let single_poll = shed_skipped;
@@ -7563,13 +7620,50 @@ mod tests {
                         break;
                     }
                     Ok(Some(_)) => {
-                        // SAFETY: waitpid on the verified
-                        // holder; reaps an adopted
-                        // zombie, ECHILD otherwise —
-                        // always ignored.
-                        let mut status = 0;
-                        unsafe {
-                            libc::waitpid(pid, &mut status, libc::WNOHANG);
+                        // R19006-F16-STRUCT (2026-11-02,
+                        // XRV1-F3): reap authority follows
+                        // SIGNALING — observe WITHOUT waiting
+                        // unless this frame issued its kill
+                        // (a waitpid here reaps whatever
+                        // zombie holds the number, including
+                        // a sibling test's freshly-killed
+                        // task learned via stale discovery —
+                        // status theft across the shared
+                        // child table). Shed-skipped, pin
+                        // failure, pre-kill unreadable, and
+                        // FAILED-signal paths never signal
+                        // and must not wait (XRV1-G1: only a
+                        // successful send grants authority).
+                        // Post-success polls keep the wait —
+                        // PEEK-GATED (XRV1-H1) and
+                        // PIN-CONSUMED (XRV1-I2): the pin
+                        // verified the kill landed on this
+                        // birth, but a kill-nop success on a
+                        // pre-owned zombie (exit-42 proven)
+                        // would steal its status — so consume
+                        // ONLY a SIGKILL death (ours — we
+                        // sent SIGKILL; other signals and
+                        // natural exits are observed, never
+                        // reaped — their owner discharges
+                        // them and a later gate poll reads
+                        // gone). The consume runs through the
+                        // HELD PIN (never numeric waitpid: a
+                        // concurrent waiter can reap between
+                        // the peek and a numeric wait, handing
+                        // us a recycled sibling's zombie —
+                        // the pin reports only our birth, or
+                        // ECHILD when the owner won the race).
+                        // Return values are untouched (the
+                        // wait's result was always ignored) —
+                        // only the reap side effect is gated.
+                        // Residual: a concurrent owner's
+                        // SIGKILL landing alongside ours is
+                        // indistinguishable post-hoc (both
+                        // read CLD_KILLED+SIGKILL) — no
+                        // observed failure; future work on
+                        // recurrence.
+                        if signaled && pin_peek_signaled(pin) {
+                            let _ = probe_victim_pin(pin);
                         }
                     }
                     Err(_) => {
@@ -7595,6 +7689,9 @@ mod tests {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
+            // XRV1-I7: the kept pin closes via RAII
+            // (`_pin_kept` drops at scope end — including
+            // through a snapshot() panic).
         }
         if !pid_gone || unresolved {
             // Best effort continues below (kill what the
@@ -9017,10 +9114,12 @@ mod tests {
         // number at a DIFFERENT birth tick (same-tick is the
         // exotic accepted residual, not this finding).
         let mut replacement = None;
+        let mut steer_lost = false;
         {
             let _flock = ns_last_pid_flock();
             for _ in 0..100 {
                 if !audit_steer_next_pid_unlocked(id) {
+                    steer_lost = true;
                     break;
                 }
                 let mut cand = std::process::Command::new("/bin/sleep")
@@ -9048,7 +9147,33 @@ mod tests {
                 break;
             }
         }
-        let mut replacement = replacement.expect("replacement placed on probe's number");
+        // R22-FLAKE07: placement is contention-shaped
+        // (parallel-suite spawns steal the steered number —
+        // 100 misses under load prove nothing about
+        // expiry), so a miss SKIPS loud (FLAKE03 exit
+        // precedent), never fails. The hint is restored
+        // before returning (leave-no-trace).
+        let Some(mut replacement) = replacement else {
+            audit_locked_restore_hint(&last_before);
+            // Best-effort tidy: the probe-forked writer
+            // (self-exiting ≤6s, scan-invisible) is
+            // tick-gated ours-or-gone — never a blind
+            // numeric kill (init reaps the orphan).
+            let _ = kill_tick_gated(writer, writer_tick);
+            if steer_lost {
+                eprintln!(
+                    "skip: PROBE-EXPIRY-REUSE-LOST ns_last_pid unwritable mid-placement \
+                     (reuse control lost — expiry verdict undecidable this run)"
+                );
+            } else {
+                eprintln!(
+                    "skip: PROBE-EXPIRY-STEERING-CONTENTION no replacement placed on {id} \
+                     in 100 steered attempts (parallel-suite spawns stole the number) — \
+                     expiry verdict undecidable this run"
+                );
+            }
+            return;
+        };
         let revived_tick = proc_starttime(id)
             .expect("replacement stat readable")
             .expect("replacement visible");
@@ -9367,10 +9492,12 @@ mod tests {
         // Controlled reuse BEFORE collection entry: a LIVE
         // SELF-GROUPED foreigner on the probe's number.
         let mut foreigner = None;
+        let mut steer_lost = false;
         {
             let _flock = ns_last_pid_flock();
             for _ in 0..100 {
                 if !audit_steer_next_pid_unlocked(id) {
+                    steer_lost = true;
                     break;
                 }
                 let mut cmd = std::process::Command::new("/bin/sleep");
@@ -9407,7 +9534,30 @@ mod tests {
                 break;
             }
         }
-        let mut foreigner = foreigner.expect("grouped foreigner placed on probe number");
+        // R13003-FLAKE01 (XRV1-R6 gate round 11, 11-03):
+        // placement is contention-shaped (parallel-suite
+        // spawns steal the steered number — 100 misses
+        // under load prove nothing about expiry), so a
+        // miss SKIPS loud (FLAKE03 exit precedent), never
+        // fails. The hint is restored before returning
+        // (leave-no-trace). Isolated 20/20 green; sibling
+        // R22-FLAKE07 fixed the same way.
+        let Some(mut foreigner) = foreigner else {
+            audit_locked_restore_hint(&last_before);
+            if steer_lost {
+                eprintln!(
+                    "skip: PROBE-EXPIRY-REUSE-LOST ns_last_pid unwritable mid-placement \
+                     (reuse control lost — expiry verdict undecidable this run)"
+                );
+            } else {
+                eprintln!(
+                    "skip: PROBE-EXPIRY-STEERING-CONTENTION no grouped foreigner placed on {id} \
+                     in 100 steered attempts (parallel-suite spawns stole the number) — \
+                     expiry verdict undecidable this run"
+                );
+            }
+            return;
+        };
         let foreign_tick = proc_starttime(id)
             .expect("foreigner stat readable")
             .expect("foreigner visible");
@@ -12214,29 +12364,55 @@ mod tests {
     }
 
     /// Kill-only unwind guard for births with a detached
-    /// SOLE reaper: the drop tick-verifies and signals but
-    /// NEVER waits (a waiting drop would be a second waiter
-    /// beside the detached thread — recycled-number status
-    /// theft on any unwind). The detached thread (still
-    /// blocked in its waitpid across our unwind) discharges
-    /// the zombie. Unpinned (birth unreadable at
-    /// construction) refuses: never blind-signal a
-    /// possibly-recycled number, never wait. Drop-in
-    /// shape: `new` pins at birth, `disarm` stands down
-    /// after an explicit retire. Never panics.
+    /// SOLE reaper: the drop signals but NEVER waits (a
+    /// waiting drop would be a second waiter beside the
+    /// detached thread — recycled-number status theft on
+    /// any unwind). The detached thread (still blocked in
+    /// its waitpid across our unwind) discharges the
+    /// zombie. Construction is TRANSFER-ONLY (XRV1-K4): a
+    /// fresh numeric read at arm time can authorize a
+    /// stranger (the original may die and be reaped by
+    /// the installed reaper before the read) — so
+    /// `transfer_from` moves the staging guard's
+    /// ESTABLISHED authority (the pidfd pin, no re-read)
+    /// into kill-only mode. Unestablished (staging never
+    /// pinned) refuses: never blind-signal a
+    /// possibly-recycled number, never wait. The pidfd
+    /// kill names the birth or ESRCHes (silent).
+    /// XRV1-L1: the tick-only kill is DELETED with the
+    /// reap guard's numeric fallback (a verify→kill atom
+    /// is unbound the same way a verify→wait is).
+    /// Never panics.
     #[cfg(target_arch = "x86_64")]
     struct KillOnlyGuard {
         pid: libc::pid_t,
-        tick: Option<u64>,
+        pidfd: Option<std::os::unix::io::OwnedFd>,
         disarmed: bool,
     }
 
     #[cfg(target_arch = "x86_64")]
     impl KillOnlyGuard {
-        fn new(pid: libc::pid_t) -> Self {
+        /// XRV1-K4: move a staging guard's established
+        /// birth authority into kill-only mode. The
+        /// staging guard is disarmed (its drop would
+        /// otherwise wait beside the detached reaper) and
+        /// its pin moves WITHOUT re-reading the number
+        /// (a re-read past the reaper's discharge would
+        /// authorize a recycled stranger).
+        fn transfer_from(mut staging: KillReapGuard) -> Self {
+            staging.disarm();
+            // Move the pin out through a replace (a Drop
+            // type's fields cannot move directly — the
+            // placeholder never observes: staging drops
+            // disarmed below).
+            let pin = std::mem::replace(&mut staging.pin, GuardPin::Unpinned);
+            let pidfd = match pin {
+                GuardPin::Pinned { pidfd, .. } => Some(pidfd),
+                GuardPin::Discharged | GuardPin::Unpinned => None,
+            };
             KillOnlyGuard {
-                pid,
-                tick: pin_birth_tick(pid),
+                pid: staging.pid,
+                pidfd,
                 disarmed: false,
             }
         }
@@ -12248,12 +12424,341 @@ mod tests {
     #[cfg(target_arch = "x86_64")]
     impl Drop for KillOnlyGuard {
         fn drop(&mut self) {
+            use std::os::unix::io::AsRawFd as _;
             if self.disarmed {
                 return;
             }
-            if let Some(tick) = self.tick {
-                // Tick-verified kill only (never wait).
-                let _ = kill_tick_gated(self.pid, tick);
+            // Kill only, never wait. Birth-bound: the
+            // pidfd names OUR birth or ESRCHes (silent —
+            // reaped). No pin ⟹ silent (XRV1-L1: the
+            // tick-only kill is deleted — custody-first).
+            if let Some(fd) = &self.pidfd {
+                let _ = super::super::seccomp::pidfd_send_signal_raw(fd.as_raw_fd(), libc::SIGKILL);
+            }
+        }
+    }
+
+    /// XRV1-I5: kill+REAP custody for the pin/peek tests —
+    /// KillOnlyGuard leaves zombies (nothing reaps on its
+    /// unwind path). Same arm/disarm API as KillOnlyGuard.
+    /// XRV1-J1: the guard ALSO pins a pidfd at
+    /// construction (birth-bound authority — the in-tree
+    /// waitpid(-1) sweeps are a second waiter, so a bare
+    /// numeric tick-check→waitpid can steal a recycled
+    /// same-tick zombie's status: proven by
+    /// `kill_reap_guard_drop_spares_sweep_recycled_status`).
+    /// XRV1-K1: the pinned reap consumes through the
+    /// pidfd (waitid P_PIDFD via [`probe_victim_pin`] —
+    /// the numeric tick-check→waitpid is UNBOUND even
+    /// with per-iteration re-verification: a deschedule
+    /// after a PASSING check admits a different-tick
+    /// recycle before the wait — no same-jiffy needed,
+    /// so the old "same-tick-only" residual understated
+    /// the window).
+    /// XRV1-K3: construction ESTABLISHES the pin
+    /// (sample→open→verify) with explicit states
+    /// ([`GuardPin`]): a recycle between sampling and
+    /// opening would otherwise pin a stranger; ESRCH at
+    /// open ⟹ [`GuardPin::Discharged`] (proven gone —
+    /// never a numeric fallback after proven
+    /// disappearance). Callers spawning possibly
+    /// instant-exit children must use stopped spawn (see
+    /// `spawn_stopped_sh_with_guard`); sleepers self-pin by
+    /// lifetime (exec-to-exit spans seconds, construction
+    /// µs — a deschedule mid-construction cannot outlast
+    /// the sleep).
+    /// XRV1-L1: NO numeric fallback (deleted — the
+    /// verify→signal and verify→wait atoms are unbound
+    /// under a competing waiter, and the sweep-zero
+    /// checks once cited to justify the fallback run in
+    /// separate helpers that never call this guard).
+    /// Without a pin there is no authority: Unpinned is
+    /// silent (custody-first).
+    /// XRV1-L9: Pinned requires BOTH capabilities
+    /// (pidfd_open AND waitid(P_PIDFD) — cached probe):
+    /// an unwaitable pin cannot reap, so it must not
+    /// claim kill authority either. Tests requiring
+    /// guard retirement MUST pre-gate on
+    /// `waitid_pidfd_supported` (loud skip on old
+    /// kernels — a silent Unpinned would run degraded).
+    /// XRV1-J7: Drop never panics — diagnostics use the
+    /// fallible `writeln!`-and-ignore pattern (an
+    /// `eprintln!` on a broken stderr during unwind would
+    /// be a second panic → abort).
+    #[cfg(target_arch = "x86_64")]
+    #[derive(Debug)]
+    enum GuardPin {
+        /// Birth-bound authority (tick + pidfd agree —
+        /// all effects go through the pin).
+        Pinned {
+            tick: u64,
+            pidfd: std::os::unix::io::OwnedFd,
+        },
+        /// Proven gone at construction (tick sampled,
+        /// then pidfd-open ESRCHed) — silent drop, TRUE
+        /// skip, never numeric effects.
+        Discharged,
+        /// Tick unreadable at construction (gone or
+        /// outage, collapsed) — silent drop (custody
+        /// first: never blind effects), FALSE skip.
+        Unpinned,
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    struct KillReapGuard {
+        pid: libc::pid_t,
+        pin: GuardPin,
+        disarmed: bool,
+    }
+
+    /// XRV1-K3: construction states, discriminant-only
+    /// (the io-free half of [`GuardPin`] — `new` attaches
+    /// the owned pidfd after classifying).
+    #[cfg(target_arch = "x86_64")]
+    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    enum GuardPinKind {
+        Pinned,
+        Discharged,
+        Unpinned,
+    }
+
+    /// XRV1-K3: the construction state table, pure (the
+    /// io — sample, open, verify, capability probe —
+    /// lives in `new`, which calls this). Each arm is
+    /// pinned by
+    /// `guard_pin_classification_maps_construction_states`
+    /// (mutant-checked: swapping any two arms REDs).
+    /// `sampled` = birth tick at sample (None ⟹
+    /// gone-or-outage); `open_errno` = pidfd-open errno
+    /// (None ⟹ opened); `verified` = birth tick re-read
+    /// after open; `waitid_ok` = waitid(P_PIDFD) usable.
+    /// XRV1-L1: NO numeric fallback — without a pin
+    /// there is no authority (Unpinned, silent).
+    /// XRV1-L9: Pinned PROMISES reap-through-the-pin, so
+    /// an opened-but-unwaitable pin (5.3: pidfd_open
+    /// without P_PIDFD waiting) degrades to Unpinned —
+    /// never a kill without reap custody.
+    #[cfg(target_arch = "x86_64")]
+    fn classify_guard_pin(
+        sampled: Option<u64>,
+        open_errno: Option<i32>,
+        verified: Option<u64>,
+        waitid_ok: bool,
+    ) -> GuardPinKind {
+        match (sampled, open_errno, verified) {
+            (None, _, _) => GuardPinKind::Unpinned,
+            (Some(_), Some(errno), _) if errno == libc::ESRCH => GuardPinKind::Discharged,
+            (Some(_), Some(_), _) => GuardPinKind::Unpinned,
+            (Some(tick), None, Some(now)) if now == tick && waitid_ok => GuardPinKind::Pinned,
+            (Some(_), None, _) => GuardPinKind::Unpinned,
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    impl KillReapGuard {
+        fn new(pid: libc::pid_t) -> Self {
+            use std::os::unix::io::FromRawFd as _;
+            // XRV1-L2: the birth MUST present stopped
+            // (self-stop first instruction — a birth that
+            // can exit can be reaped by an ambient
+            // in-process sweep and recycled before the
+            // sample, and sample+open+verify then
+            // authenticate the replacement as Pinned —
+            // nominal sleep duration is no reservation).
+            // STOP-BY-NUMBER DOES NOT SATISFY THIS (the
+            // stop itself can land on a recycled
+            // stranger); the stop must be SELF-INFLICTED
+            // (stopped-spawn helpers, J1 self-stop fork,
+            // L8 self-stop wrapper). Stopped ⟹ cannot
+            // exit ⟹ cannot be reaped ⟹ the sample names
+            // OUR birth. XRV1-L11: the hold read retries
+            // transient outage (a single-read panic on
+            // None would strand an actually-stopped
+            // birth with no guard armed); a wrong
+            // OBSERVED state panics immediately.
+            let hold_end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                match hold_read_retry(
+                    proc_state(pid),
+                    std::time::Instant::now() >= hold_end,
+                ) {
+                    HoldRead::Proceed => break,
+                    HoldRead::Retry => {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                    }
+                    HoldRead::PanicWrongState => panic!(
+                        "staging broken (guard requires a held birth — self-stop + T-await first; got {0:?})",
+                        proc_state(pid)
+                    ),
+                    HoldRead::PanicOutage => panic!(
+                        "staging broken (birth {pid} unreadable past 5s — host outage?)"
+                    ),
+                }
+            }
+            // Sample→open→verify (XRV1-K3): a recycle
+            // between sample and open would pin a
+            // stranger — the post-open re-read routes
+            // mismatches to Unpinned (XRV1-L1: no
+            // numeric fallback — no authority without
+            // a pin). ESRCH at open ⟹ Discharged
+            // (proven gone). Pinned additionally
+            // requires waitid(P_PIDFD) (XRV1-L9 —
+            // cached probe): an unwaitable pin cannot
+            // reap, so it must not claim authority.
+            let sampled = pin_birth_tick(pid);
+            let opened = super::super::seccomp::pidfd_open_raw(pid);
+            let verified = proc_starttime(pid).unwrap_or(None);
+            let open_errno = opened.as_ref().err().copied();
+            let owned = opened
+                .ok()
+                .map(|fd| unsafe { std::os::unix::io::OwnedFd::from_raw_fd(fd) });
+            let pin =
+                match classify_guard_pin(sampled, open_errno, verified, waitid_pidfd_supported()) {
+                    GuardPinKind::Pinned => GuardPin::Pinned {
+                        // Classifier-total: Pinned implies
+                        // sampled + opened (a logic break here
+                        // must be LOUD, never a silent
+                        // mis-state).
+                        tick: sampled.expect("pinned implies sampled"),
+                        pidfd: owned.expect("pinned implies opened"),
+                    },
+                    GuardPinKind::Discharged => GuardPin::Discharged,
+                    GuardPinKind::Unpinned => GuardPin::Unpinned,
+                };
+            KillReapGuard {
+                pid,
+                pin,
+                disarmed: false,
+            }
+        }
+        fn disarm(&mut self) {
+            self.disarmed = true;
+        }
+
+        /// XRV1-J2/K2: bounded kill+reap for the pin/peek
+        /// tests' pidfd-unavailable skip paths.
+        /// Precondition: call BEFORE any handle-wait (the
+        /// handle is unreaped — the guard armed at spawn).
+        /// True ⟺ discharge CONFIRMED (the caller disarms);
+        /// false ⟺ unresolved (the guard stays armed; drop
+        /// retires). Pinned: kill AND reap go through the
+        /// pidfd (waitid — no numeric try_wait at all, so
+        /// no steal window); ESRCH (ours reaped by a
+        /// sweep) returns TRUE with NO numeric effects.
+        /// Discharged ⟹ TRUE immediately. Unpinned ⟹ FALSE
+        /// (unknown state, honestly unresolved —
+        /// XRV1-L1: NO numeric fallback; the sweep-zero
+        /// checks cited for it run in separate helpers
+        /// that never call this guard). The `&mut Child`
+        /// borrow is the precondition made checkable (the
+        /// caller proves it still owns the unreaped
+        /// handle); the handle itself is never touched.
+        fn skip_discharge(&self, _child: &mut std::process::Child) -> bool {
+            use std::os::unix::io::AsRawFd as _;
+            match &self.pin {
+                GuardPin::Discharged => true,
+                GuardPin::Unpinned => false,
+                GuardPin::Pinned { pidfd, .. } => {
+                    if super::super::seccomp::pidfd_send_signal_raw(
+                        pidfd.as_raw_fd(),
+                        libc::SIGKILL,
+                    ) == Err(libc::ESRCH)
+                    {
+                        return true;
+                    }
+                    let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    loop {
+                        match probe_victim_pin(pidfd.as_raw_fd()) {
+                            PinProbe::Reaped(_) | PinProbe::ReapedElsewhere => return true,
+                            PinProbe::NotReady => {
+                                if std::time::Instant::now() >= end {
+                                    return false;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                            }
+                            PinProbe::Unverifiable(_) => return false,
+                        }
+                    }
+                }
+            }
+        }
+        // XRV1-L1: the numeric fallback is DELETED
+        // (numeric_route/NumericRoute removed with it) —
+        // the verify→signal and verify→wait atoms are
+        // unbound under a competing waiter, and the
+        // sweep-zero checks cited to justify the fallback
+        // run in separate helpers that never call this
+        // guard. Unpinned stays honestly unresolved.
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    impl Drop for KillReapGuard {
+        fn drop(&mut self) {
+            use std::io::Write as _;
+            use std::os::unix::io::AsRawFd as _;
+            if self.disarmed {
+                return;
+            }
+            match &self.pin {
+                GuardPin::Discharged | GuardPin::Unpinned => {}
+                GuardPin::Pinned { tick, pidfd } => {
+                    // Birth-bound kill (XRV1-J1): the pidfd
+                    // names OUR birth or ESRCHes — a
+                    // foreigner can never take this signal.
+                    // ESRCH (ours reaped by a sweep)
+                    // returns SILENT: the zombie is gone,
+                    // nothing of ours remains to collect.
+                    if super::super::seccomp::pidfd_send_signal_raw(
+                        pidfd.as_raw_fd(),
+                        libc::SIGKILL,
+                    ) == Err(libc::ESRCH)
+                    {
+                        return;
+                    }
+                    // Birth-bound reap (XRV1-K1): waitid
+                    // through the pin consumes ONLY our
+                    // birth's status — no numeric waitpid,
+                    // no steal window at all.
+                    let end = std::time::Instant::now() + std::time::Duration::from_secs(1);
+                    loop {
+                        match probe_victim_pin(pidfd.as_raw_fd()) {
+                            PinProbe::Reaped(_) | PinProbe::ReapedElsewhere => return,
+                            PinProbe::NotReady => {
+                                if std::time::Instant::now() >= end {
+                                    // XRV1-J7: fallible
+                                    // write — never
+                                    // eprintln! (panics on
+                                    // broken stderr; in
+                                    // Drop during unwind
+                                    // that aborts).
+                                    let _ = writeln!(
+                                        std::io::stderr(),
+                                        "KillReapGuard: {0}/{1} unreaped past 1s bound (live-unkillable?)",
+                                        self.pid,
+                                        tick
+                                    );
+                                    return;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(10));
+                            }
+                            PinProbe::Unverifiable(evidence) => {
+                                let _ = writeln!(
+                                    std::io::stderr(),
+                                    "KillReapGuard: {0}/{1} waitid unverifiable ({evidence})",
+                                    self.pid,
+                                    tick
+                                );
+                                return;
+                            }
+                        }
+                    }
+                } // XRV1-L1: NO numeric fallback arm —
+                  // Unpinned is silent (custody-first: never
+                  // blind effects on a possibly-recycled
+                  // number). The deleted arm's verify→wait
+                  // atom was unbound under a competing
+                  // waiter, and the sweep-zero checks cited
+                  // to justify it never call this guard.
             }
         }
     }
@@ -13350,7 +13855,10 @@ mod tests {
                     });
                     continue;
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                // R22008-FLAKE01: ESRCH skips with NotFound
+                // (reaped mid-enumeration — the entry's task
+                // is gone, never an outage).
+                Err(error) if proc_entry_gone(&error) => continue,
                 Err(error) => {
                     let errno = error.raw_os_error();
                     if errno == Some(libc::EMFILE) || errno == Some(libc::ENFILE) {
@@ -13559,7 +14067,9 @@ mod tests {
         };
         // Pgrp tri-state: self ⟹ normal (below); foreign ⟹
         // panic (never self-grouped — unchanged); gone ⟹
-        // panic (pin released mid-entry — violation);
+        // panic (pin released mid-entry — violation; XRV1-J3:
+        // ESRCH-during-read is gone, not outage — routing
+        // it degraded would strike a recycled number);
         // outage ⟹ degraded (tick-pin held).
         match read_pgrp_checked(pubpid) {
             Ok(Some(pgrp)) if pgrp == pubpid => {}
@@ -13571,7 +14081,7 @@ mod tests {
                 "unparsed publisher {pubpid} stat malformed (pgrp unparseable — \
                  group unverifiable)"
             ),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => panic!(
+            Err(error) if proc_entry_gone(&error) => panic!(
                 "unparsed publisher {pubpid} reaped mid-entry (pin released — \
                  group retire refused: unpinned killpg)"
             ),
@@ -14061,19 +14571,506 @@ mod tests {
     /// final verdict read (the pin pre-creates it; the
     /// replacement test creates it after planting — the
     /// verdict read is then guaranteed post-plant,
-    /// deterministic, no race).
+    /// deterministic, no race). `hold_iters`: the
+    /// ACK-hold loop bound (production: 200 ≈ 10s; the
+    /// expiry probe passes 2 to force the timeout
+    /// branch in ~0.1s — same script, same flag logic,
+    /// only the bound differs). R21018-FLAKE01: a bare
+    /// HELD conflates unreaped-zombie, live, and same-tick
+    /// stranger — the TEST discriminates test-side
+    /// (XRV1-I6: shell-side `tr || echo` lumps every
+    /// cmdline failure into one marker, which would hide a
+    /// reaping regression behind a skip; Rust reads with
+    /// full error discipline instead).
     #[cfg(target_arch = "x86_64")]
-    fn shell_reap_probe_script(dur: &str, flag: &std::path::Path) -> String {
+    fn shell_reap_probe_script(
+        dur: &str,
+        flag: &std::path::Path,
+        ack: &std::path::Path,
+        hold_iters: u32,
+    ) -> String {
         // R21-018: birth-tracked verdict — T0 captured
         // pre-kill (post-") " field 20 = starttime, same
         // strip the publisher bin uses); the poll breaks on
         // gone-or-reticked and HELD requires the SAME birth
         // to persist (a replacement occupant verdicts
-        // REAPED). Empty T0 fails loud (BROKEN).
+        // REAPED). Empty T0 fails loud (BROKEN). NO
+        // trailing `wait` (XRV1-J5): the shell must not
+        // reap between printing HELD and Rust's
+        // classification — the zombie IS the evidence.
+        // ACK-HOLD (XRV1-K7): after DONE the shell waits
+        // (bounded 10s) for Rust's acknowledgment instead
+        // of exiting — an exiting shell reparents the
+        // zombie to init, which reaps it before Rust's
+        // pipe wakeup under load and converts a genuine
+        // boundary-reaping regression into a DiedMidVerdict
+        // skip. The hold spins on a FILE, never on the
+        // child (the zombie is held, never reaped, until
+        // Rust classifies + ACKs). RECEIPT TRAILER
+        // (XRV1-L5/L18): the hold ALWAYS prints exactly
+        // one receipt line — ACKED (saw the ack) or
+        // ACK-TIMEOUT (looped the full 200 — Rust stalled
+        // >10s, host seizure). Break-vs-exhaust is
+        // recorded in a flag (a late ack landing between
+        // loop-exit and the test must NOT reclassify an
+        // expired hold as clean). Rust REQUIRES the
+        // receipt: EOF/error (died pre-trailer) ⟹
+        // staging-failure skip; unexpected line ⟹
+        // script-bug panic — never a silent plain
+        // DiedMidVerdict.
         format!(
-            "sleep {dur} & P=$!; echo $P; S=$(cat /proc/$P/stat); S=${{S##*) }}; T0=$(echo $S | cut -d' ' -f20); if [ -z \"$T0\" ]; then echo BROKEN; exit 1; fi; echo $T0; kill -9 $P; for i in 1 2 3 4 5 6 7 8 9 10; do S=$(cat /proc/$P/stat 2>/dev/null) || break; S=${{S##*) }}; T=$(echo $S | cut -d' ' -f20); if [ \"$T\" != \"$T0\" ]; then break; fi; sleep 1; done; while [ ! -e {} ]; do sleep 0.05; done; S=$(cat /proc/$P/stat 2>/dev/null); if [ -n \"$S\" ]; then S=${{S##*) }}; T=$(echo $S | cut -d' ' -f20); if [ \"$T\" = \"$T0\" ]; then echo HELD; else echo REAPED; fi; else echo REAPED; fi; wait 2>/dev/null; echo DONE",
-            flag.display()
+            "sleep {dur} & P=$!; echo $P; S=$(cat /proc/$P/stat); S=${{S##*) }}; T0=$(echo $S | cut -d' ' -f20); if [ -z \"$T0\" ]; then echo BROKEN; exit 1; fi; echo $T0; kill -9 $P; for i in 1 2 3 4 5 6 7 8 9 10; do S=$(cat /proc/$P/stat 2>/dev/null) || break; S=${{S##*) }}; T=$(echo $S | cut -d' ' -f20); if [ \"$T\" != \"$T0\" ]; then break; fi; sleep 1; done; while [ ! -e {} ]; do sleep 0.05; done; S=$(cat /proc/$P/stat 2>/dev/null); if [ -n \"$S\" ]; then S=${{S##*) }}; T=$(echo $S | cut -d' ' -f20); if [ \"$T\" = \"$T0\" ]; then echo HELD; else echo REAPED; fi; else echo REAPED; fi; echo DONE; timed_out=1; for i in $(seq 1 {hold_iters}); do [ -e {} ] && {{ timed_out=; break; }}; sleep 0.05; done; if [ -n \"$timed_out\" ]; then echo ACK-TIMEOUT; else echo ACKED; fi",
+            flag.display(),
+            ack.display(),
         )
+    }
+
+    /// XRV1-L18: hold-receipt outcome (pure decision
+    /// — see `classify_hold_receipt`).
+    #[cfg(target_arch = "x86_64")]
+    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    enum HoldReceipt {
+        /// The shell saw our ack (hold clean — a
+        /// mid-verdict death is genuinely undecidable).
+        Clean,
+        /// The shell looped the full 200 (Rust stalled
+        /// 10s+ — the hold expired, init may have
+        /// reaped ⟹ staging failure, distinct marker).
+        Expired,
+        /// EOF or read error (the shell died before or
+        /// without its receipt ⟹ staging failure — its
+        /// death erases nothing silently).
+        Unproven,
+        /// An unexpected line (OUR script bug ⟹ panic,
+        /// never a verdict).
+        ScriptBug,
+    }
+
+    /// XRV1-L18: hold-receipt classification, pure (the
+    /// trailer line Rust read: Some(Ok) ⟹ Clean/Expired/
+    /// ScriptBug by content; None/Err ⟹ Unproven). EOF
+    /// is NOT clean (a shell death before emitting its
+    /// marker must never surface as a plain
+    /// DiedMidVerdict). Pinned by
+    /// `hold_receipt_classification_maps_trailer_lines`.
+    #[cfg(target_arch = "x86_64")]
+    fn classify_hold_receipt(line: Option<Result<String, String>>) -> HoldReceipt {
+        match line {
+            Some(Ok(text)) if text.trim() == "ACKED" => HoldReceipt::Clean,
+            Some(Ok(text)) if text.trim() == "ACK-TIMEOUT" => HoldReceipt::Expired,
+            Some(Ok(_)) => HoldReceipt::ScriptBug,
+            Some(Err(_)) | None => HoldReceipt::Unproven,
+        }
+    }
+
+    /// XRV1-L18: read one hold-receipt line off the
+    /// script pipe and classify it (the wire the
+    /// mid-verdict arm and the receipt probes share —
+    /// one `lines.next()` ⟹ one `HoldReceipt`, so a
+    /// wire bug breaks ALL of them, loudly).
+    #[cfg(target_arch = "x86_64")]
+    fn read_hold_receipt(
+        lines: &mut std::io::Lines<std::io::BufReader<std::process::ChildStdout>>,
+    ) -> HoldReceipt {
+        classify_hold_receipt(lines.next().map(|r| r.map_err(|error| error.to_string())))
+    }
+
+    /// XRV1-L18 collateral: the hold-receipt table —
+    /// ACKED ⟹ Clean; ACK-TIMEOUT ⟹ Expired; EOF/Err ⟹
+    /// Unproven (NEVER clean — a pre-receipt shell death
+    /// must surface as staging failure); anything else
+    /// ⟹ ScriptBug. Mutant-checked (collapsing
+    /// Unproven/Clean REDs).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn hold_receipt_classification_maps_trailer_lines() {
+        assert_eq!(
+            classify_hold_receipt(Some(Ok("ACKED".to_string()))),
+            HoldReceipt::Clean
+        );
+        assert_eq!(
+            classify_hold_receipt(Some(Ok("ACK-TIMEOUT".to_string()))),
+            HoldReceipt::Expired
+        );
+        assert_eq!(classify_hold_receipt(None), HoldReceipt::Unproven);
+        assert_eq!(
+            classify_hold_receipt(Some(Err("boom".to_string()))),
+            HoldReceipt::Unproven
+        );
+        assert_eq!(
+            classify_hold_receipt(Some(Ok("DONE".to_string()))),
+            HoldReceipt::ScriptBug
+        );
+        assert_eq!(
+            classify_hold_receipt(Some(Ok(String::new()))),
+            HoldReceipt::ScriptBug
+        );
+    }
+
+    /// R21018-FLAKE01: classification of a HELD
+    /// occupant (the script matched its tick ms ago).
+    #[cfg(target_arch = "x86_64")]
+    #[derive(Debug)]
+    enum HeldReapVerdict {
+        /// Our birth persists (argv matches or empty —
+        /// see below): the pin TRIPS.
+        OursPersists { state: String },
+        /// A live same-tick stranger (foreign argv proves
+        /// it is not ours — ours is gone): S100-skip.
+        SameTickStranger { argv: String },
+        /// Changed since the script's verdict (gone,
+        /// reticked, or died between our stat and cmdline
+        /// reads): the HELD evidence is stale,
+        /// undecidable, skip.
+        DiedMidVerdict,
+        /// Present but unreadable (non-gone errno) or
+        /// unparseable: fail-closed TRIP (XRV1-I6 — a
+        /// systematic cmdline/stat failure must never hide
+        /// behind a skip).
+        UnreadableTrip { error: String },
+    }
+
+    /// Pure argv leg of the HELD classification (the
+    /// victim's expected argv is `sleep <dur>`, dur unique
+    /// per test). The raw cmdline is NUL-separated
+    /// (XRV1-J4: kernel-shaped `sleep\x0083\x00`, NEVER
+    /// space-joined — comparing raw bytes against
+    /// `"sleep 83"` matches nothing and would neuter the
+    /// pin into an always-skip); normalize NUL runs to
+    /// single spaces first. Empty argv is zombie-ambiguous
+    /// (ours-unreaped vs a same-tick stranger zombie —
+    /// both read empty) and fails CLOSED toward TRIP: the
+    /// pin's core case is ours-unreaped (dash had 10s of
+    /// boundaries), while a same-tick stranger zombie
+    /// needs birth+death+unreaped alignment. (Asymmetric
+    /// with R24006's empty-abstain by ownership: that
+    /// sleeper is init-reaped in ms; this one is dash's
+    /// unreaped child after 10s.)
+    /// NUL-shape normalizer for the HELD argv leg
+    /// (XRV1-J4 follow-up): BOTH compared sides pass
+    /// through this — the caller may hand raw cmdline
+    /// bytes as `expected` (the self-arm does), and
+    /// comparing raw-vs-normalized would never match.
+    #[cfg(target_arch = "x86_64")]
+    fn normalize_cmdline_argv(argv: &str) -> String {
+        argv.split('\0')
+            .filter(|token| !token.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn classify_held_argv(argv: &str, expected_argv: &str) -> HeldReapVerdict {
+        let normalized = normalize_cmdline_argv(argv);
+        let expected = normalize_cmdline_argv(expected_argv);
+        if normalized == expected || normalized.is_empty() {
+            HeldReapVerdict::OursPersists {
+                state: String::new(),
+            }
+        } else {
+            HeldReapVerdict::SameTickStranger {
+                argv: argv.to_string(),
+            }
+        }
+    }
+
+    /// Read + classify the HELD occupant test-side (the
+    /// script's tick-match is ms old — re-verify WITH the
+    /// read; anything changed since is stale evidence,
+    /// undecidable). Returns the verdict directly.
+    /// XRV1-L19: parse one `/proc/<pid>/stat`
+    /// content into (state, starttime-tick) — the
+    /// parse shared by the pre- and post-cmdline
+    /// reads. None ⟹ fail-closed upstream.
+    #[cfg(target_arch = "x86_64")]
+    fn parse_stat_state_tick(stat: &str) -> Option<(String, u64)> {
+        let after = stat.rsplit_once(") ")?.1;
+        let mut words = after.split_whitespace();
+        let state = words.next()?.to_string();
+        let tick: u64 = words.nth(18)?.parse().ok()?;
+        Some((state, tick))
+    }
+
+    /// XRV1-L19: one (state, tick) observation with
+    /// full error discipline (the stat read shared by
+    /// the pre- and post-cmdline observations — gone
+    /// ⟹ stale skip, unreadable/unparseable ⟹
+    /// fail-closed trip).
+    #[cfg(target_arch = "x86_64")]
+    fn observed_birth(pid: libc::pid_t) -> Result<(String, u64), HeldReapVerdict> {
+        let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => stat,
+            Err(error) if proc_entry_gone(&error) => {
+                return Err(HeldReapVerdict::DiedMidVerdict);
+            }
+            Err(error) => {
+                return Err(HeldReapVerdict::UnreadableTrip {
+                    error: format!("stat unreadable: {error}"),
+                });
+            }
+        };
+        parse_stat_state_tick(&stat).ok_or(HeldReapVerdict::UnreadableTrip {
+            error: "stat unparseable".to_string(),
+        })
+    }
+
+    /// XRV1-L19: the post-cmdline birth observation
+    /// (the bind input — what the number holds AFTER
+    /// the cmdline open).
+    #[cfg(target_arch = "x86_64")]
+    enum PostCmdlineBirth {
+        /// Tick still matches: the cmdline belongs to
+        /// the same birth (bound — verdict stands).
+        TickMatches,
+        /// Tick changed: the cmdline belongs to a
+        /// recycled number (stale).
+        TickChanged,
+        /// Gone: died between cmdline and re-read
+        /// (stale).
+        Gone,
+        /// Re-read failed non-gone (fail-closed trip).
+        Unreadable { error: String },
+    }
+
+    /// XRV1-L19: birth-bind the cmdline verdict — it
+    /// stands ONLY when the post-read tick still
+    /// matches. A changed/gone birth means the argv
+    /// came from a different birth (or none): STALE,
+    /// always DiedMidVerdict — a foreign argv from a
+    /// post-stat recycle must NEVER skip as a stranger
+    /// and hide the observed (matching-tick, possibly
+    /// zombie) occupant. The trip carries the PRE-read
+    /// state (the observation it is anchored on).
+    #[cfg(target_arch = "x86_64")]
+    fn bind_cmdline_observation(
+        argv_verdict: HeldReapVerdict,
+        post: PostCmdlineBirth,
+    ) -> HeldReapVerdict {
+        match post {
+            PostCmdlineBirth::TickMatches => argv_verdict,
+            PostCmdlineBirth::TickChanged | PostCmdlineBirth::Gone => {
+                HeldReapVerdict::DiedMidVerdict
+            }
+            PostCmdlineBirth::Unreadable { error } => HeldReapVerdict::UnreadableTrip { error },
+        }
+    }
+
+    /// Read + classify the HELD occupant test-side (the
+    /// script's tick-match is ms old — re-verify WITH the
+    /// read; anything changed since is stale evidence,
+    /// undecidable). The cmdline is a SEPARATE open
+    /// after the stat — its verdict is birth-bound by a
+    /// post-read tick re-verify (XRV1-L19), so a
+    /// reap/recycle between the two reads surfaces as
+    /// stale, never as a stranger skip over an observed
+    /// zombie. Returns the verdict directly.
+    #[cfg(target_arch = "x86_64")]
+    fn classify_held_occupant(
+        pid: libc::pid_t,
+        tick: u64,
+        expected_argv: &str,
+    ) -> HeldReapVerdict {
+        let (state, now) = match observed_birth(pid) {
+            Ok(pair) => pair,
+            Err(verdict) => return verdict,
+        };
+        if now != tick {
+            return HeldReapVerdict::DiedMidVerdict;
+        }
+        let argv_verdict = match std::fs::read(format!("/proc/{pid}/cmdline")) {
+            Ok(cmd) => {
+                let argv = String::from_utf8_lossy(&cmd);
+                match classify_held_argv(&argv, expected_argv) {
+                    HeldReapVerdict::OursPersists { .. } => {
+                        HeldReapVerdict::OursPersists { state }
+                    }
+                    other => other,
+                }
+            }
+            Err(error) if proc_entry_gone(&error) => HeldReapVerdict::DiedMidVerdict,
+            Err(error) => HeldReapVerdict::UnreadableTrip {
+                error: format!("cmdline unreadable: {error}"),
+            },
+        };
+        // XRV1-L19 BIND: re-observe the birth AFTER the
+        // cmdline open. Tick still matches ⟹ the argv
+        // belongs to the same birth (verdict stands);
+        // changed/gone ⟹ the argv is stale (DiedMidVerdict
+        // via the receipt path — never a stranger skip).
+        let post = match observed_birth(pid) {
+            Ok((_, re)) if re == tick => PostCmdlineBirth::TickMatches,
+            Ok(_) => PostCmdlineBirth::TickChanged,
+            Err(HeldReapVerdict::DiedMidVerdict) => PostCmdlineBirth::Gone,
+            Err(HeldReapVerdict::UnreadableTrip { error }) => {
+                PostCmdlineBirth::Unreadable { error }
+            }
+            Err(other) => {
+                return other;
+            }
+        };
+        bind_cmdline_observation(argv_verdict, post)
+    }
+
+    /// XRV1-L19 collateral: the stat (state, tick)
+    /// parse — kernel-shaped `pid (comm) S ...` lines
+    /// yield field-20 starttime; anything else yields
+    /// None (fail-closed upstream). Pinned with the
+    /// bind table below.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn stat_state_tick_parse_reads_field_20() {
+        // Kernel-shaped: pid (comm-with-space) state
+        // ppid pgrp ... starttime(field 20).
+        let line = "12345 (my sleep) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 987654 20 21";
+        assert_eq!(
+            parse_stat_state_tick(line),
+            Some(("S".to_string(), 987654))
+        );
+        let zombie = "12345 (sleep) Z 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 555 20 21";
+        assert_eq!(parse_stat_state_tick(zombie), Some(("Z".to_string(), 555)));
+        assert_eq!(parse_stat_state_tick(""), None);
+        assert_eq!(parse_stat_state_tick("12345 (sleep) S"), None);
+        assert_eq!(
+            parse_stat_state_tick(
+                "12345 (sleep) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 xx 20 21",
+            ),
+            None
+        );
+    }
+
+    /// XRV1-L19 collateral: the birth-bind table — a
+    /// cmdline verdict stands ONLY when the post-read
+    /// tick still matches (same birth); a changed/gone
+    /// birth ⟹ DiedMidVerdict (STALE — a foreign argv
+    /// from a recycled number must NEVER skip as a
+    /// stranger and hide the observed zombie); an
+    /// unreadable re-read trips fail-closed.
+    /// Mutant-checked (passing stale through REDs).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn cmdline_birth_bind_gates_verdict_on_post_read_tick() {
+        let ours = || HeldReapVerdict::OursPersists {
+            state: "Z".to_string(),
+        };
+        let stranger = || HeldReapVerdict::SameTickStranger {
+            argv: "sleep 111".to_string(),
+        };
+        // Bound (tick still matches): verdicts stand,
+        // evidence preserved.
+        match bind_cmdline_observation(ours(), PostCmdlineBirth::TickMatches) {
+            HeldReapVerdict::OursPersists { state } => assert_eq!(state, "Z"),
+            other => panic!("bound ours must trip, got {other:?}"),
+        }
+        match bind_cmdline_observation(stranger(), PostCmdlineBirth::TickMatches) {
+            HeldReapVerdict::SameTickStranger { argv } => assert_eq!(argv, "sleep 111"),
+            other => panic!("bound stranger must skip, got {other:?}"),
+        }
+        // Stale (changed/gone): BOTH collapse to
+        // DiedMidVerdict — never a stranger skip.
+        for post in [PostCmdlineBirth::TickChanged, PostCmdlineBirth::Gone] {
+            match bind_cmdline_observation(ours(), post) {
+                HeldReapVerdict::DiedMidVerdict => {}
+                other => panic!("stale ours must skip undecidable, got {other:?}"),
+            }
+        }
+        for post in [PostCmdlineBirth::TickChanged, PostCmdlineBirth::Gone] {
+            match bind_cmdline_observation(stranger(), post) {
+                HeldReapVerdict::DiedMidVerdict => {}
+                other => panic!("stale stranger must NOT skip as stranger, got {other:?}"),
+            }
+        }
+        // Unreadable re-read: fail-closed trip.
+        match bind_cmdline_observation(
+            ours(),
+            PostCmdlineBirth::Unreadable {
+                error: "boom".to_string(),
+            },
+        ) {
+            HeldReapVerdict::UnreadableTrip { error } => assert!(error.contains("boom")),
+            other => panic!("unreadable re-read must trip, got {other:?}"),
+        }
+    }
+
+    /// R21018-FLAKE01 collateral: the HELD argv leg trips
+    /// ours (live or zombie-ambiguous) and skips proven
+    /// strangers — all inputs KERNEL-SHAPED (XRV1-J4:
+    /// NUL-separated; space-joined fakes passed vacuously
+    /// and are banned here); the occupant reader skips
+    /// gone/reticked deterministically (self pid +
+    /// impossible pid — no suite interference: the reader
+    /// only READS) and trips a REAL live sleeper (dur 84,
+    /// unused anywhere else, owned + guarded).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn held_reap_verdict_classifies_occupant() {
+        match classify_held_argv("sleep\u{0}83\u{0}", "sleep 83") {
+            HeldReapVerdict::OursPersists { .. } => {}
+            other => panic!("live ours must trip, got {other:?}"),
+        }
+        match classify_held_argv("", "sleep 83") {
+            HeldReapVerdict::OursPersists { .. } => {}
+            other => panic!("zombie-ambiguous must trip fail-closed, got {other:?}"),
+        }
+        match classify_held_argv("sleep\u{0}111\u{0}", "sleep 83") {
+            HeldReapVerdict::SameTickStranger { argv } => {
+                assert!(argv.contains("sleep"), "argv preserved: {argv:?}")
+            }
+            other => panic!("foreign argv must skip as stranger, got {other:?}"),
+        }
+        // Reader: a REAL live sleeper trips (owns-argv
+        // match through the live read path) — XRV1-L2
+        // stopped-sleep (post-exec argv is a plain
+        // [sleep, 84]).
+        let (mut real, mut _rguard) = spawn_stopped_sh_with_guard("exec sleep 84");
+        let real_pid = real.id() as libc::pid_t;
+        // Settle exec'd (argv is the exec-proof — the
+        // classify below reads argv, and pre-exec sh argv
+        // would misread as a stranger).
+        await_exec_argv0(real_pid, "sleep");
+        let real_tick: u64 = proc_starttime(real_pid)
+            .expect("sleeper stat readable")
+            .expect("sleeper visible");
+        match classify_held_occupant(real_pid, real_tick, "sleep 84") {
+            HeldReapVerdict::OursPersists { state } => {
+                assert_ne!(state, "Z", "live sleeper trips live: {state}")
+            }
+            other => panic!("live sleeper must trip, got {other:?}"),
+        }
+        let _ = real.kill();
+        let _ = real.wait();
+        _rguard.disarm();
+        // Reader: impossible pid is gone ⟹ skip.
+        match classify_held_occupant(libc::pid_t::MAX, 1, "sleep 83") {
+            HeldReapVerdict::DiedMidVerdict => {}
+            other => panic!("gone occupant must skip, got {other:?}"),
+        }
+        // Reader: self pid anchors the live paths (our own
+        // argv is the test binary — always foreign to a
+        // sleep victim; our own tick always matches).
+        let me = std::process::id() as libc::pid_t;
+        let my_tick: u64 = proc_starttime(me)
+            .expect("self stat readable")
+            .expect("self visible");
+        match classify_held_occupant(me, my_tick, "sleep 83") {
+            HeldReapVerdict::SameTickStranger { .. } => {}
+            other => panic!("self (foreign argv) must skip as stranger, got {other:?}"),
+        }
+        match classify_held_occupant(me, my_tick.wrapping_add(1), "sleep 83") {
+            HeldReapVerdict::DiedMidVerdict => {}
+            other => panic!("reticked self must skip, got {other:?}"),
+        }
+        // Reader: self argv matches when expected
+        // (ours — trip plumbing, not a trip of the suite;
+        // expected is the FULL cmdline — argv0-only would
+        // break under cargo test filters).
+        let my_cmdline = std::fs::read(format!("/proc/{me}/cmdline")).expect("self cmdline");
+        let my_argv = String::from_utf8_lossy(&my_cmdline);
+        match classify_held_occupant(me, my_tick, my_argv.trim()) {
+            HeldReapVerdict::OursPersists { state } => {
+                assert!(!state.is_empty(), "state carried: {state}")
+            }
+            other => panic!("matching argv must trip, got {other:?}"),
+        }
     }
 
     #[test]
@@ -14083,9 +15080,16 @@ mod tests {
         let flag = std::env::temp_dir().join(format!("scopebase-r21018-go-{}", std::process::id()));
         let _ = std::fs::remove_file(&flag);
         std::fs::write(&flag, "go\n").expect("rendezvous pre-created");
+        // XRV1-K7: classification acknowledgment (the
+        // shell holds its zombie until Rust ACKs — an
+        // unheld exit lets init reap before classification
+        // and hides a boundary-reaping regression behind
+        // a DiedMidVerdict skip).
+        let ack = std::env::temp_dir().join(format!("scopebase-r21018-ack-{}", std::process::id()));
+        let _ = std::fs::remove_file(&ack);
         let mut sh = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg(shell_reap_probe_script("83", &flag))
+            .arg(shell_reap_probe_script("83", &flag, &ack, 200))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
@@ -14118,17 +15122,125 @@ mod tests {
             .next()
             .expect("verdict line")
             .expect("verdict readable");
-        assert_eq!(
-            verdict.trim(),
-            "REAPED",
-            "shell must reap the dead background child at a command boundary"
-        );
+        // R21018-FLAKE01: a bare HELD conflates three
+        // mechanisms — discriminate TEST-side (XRV1-I6:
+        // shell-side lumping would hide a reaping
+        // regression behind a skip). Ours-persists and
+        // unreadable TRIP (the pin's job — fail-closed);
+        // proven-stranger and mid-verdict-death SKIP loud
+        // (S100 doctrine — dash's boundary behavior is
+        // undecidable from that evidence, never a
+        // certified pass). Skip arms tidy explicitly
+        // (kill+reap the shell, drop the flag) — no
+        // reliance on guard-drop timing.
+        if verdict.trim() != "REAPED" {
+            if verdict.trim() != "HELD" {
+                panic!("unrecognized reap verdict: {verdict:?}");
+            }
+            match classify_held_occupant(pid as libc::pid_t, tick, "sleep 83") {
+                // Trips fire WITHOUT the trailer (a present
+                // occupant was OBSERVED — init did not reap —
+                // the hold is moot; the shell spins until
+                // the unwind guard kills it).
+                HeldReapVerdict::OursPersists { state } => panic!(
+                    "shell must reap the dead background child at a command boundary \
+                     (same-tick sleep-83 persists, state={state})"
+                ),
+                // Stranger skips WITHOUT the trailer (a
+                // foreign occupant was OBSERVED — expiry
+                // produces absence, never foreign argv —
+                // the hold is moot).
+                HeldReapVerdict::SameTickStranger { argv } => {
+                    eprintln!(
+                        "skip: R21018-SAME-TICK-STRANGER occupant {pid}/{tick} shows \
+                         foreign argv [{argv}] — ours is gone, dash's boundary behavior \
+                         undecidable this run"
+                    );
+                    drop(lines);
+                    let _ = sh.kill();
+                    let _ = sh.wait();
+                    _shguard.disarm();
+                    let _ = std::fs::remove_file(&flag);
+                    let _ = std::fs::remove_file(&ack);
+                    return;
+                }
+                // Death DEFERS past the hold outcome
+                // (XRV1-L5): a mid-verdict death under a
+                // CLEAN hold is genuinely undecidable
+                // (dash reaped at a verdict boundary —
+                // neither the 10 nor never); under an
+                // EXPIRED hold init may have reaped — a
+                // staging failure with a DISTINCT marker,
+                // never a silent DiedMidVerdict.
+                HeldReapVerdict::DiedMidVerdict => {
+                    let done = lines.next().expect("done line").expect("done readable");
+                    assert_eq!(done.trim(), "DONE", "script must run to completion");
+                    std::fs::write(&ack, "ack\n").expect("ack released");
+                    // Receipt (XRV1-L18): the hold MUST
+                    // prove itself — ACKED ⟹ clean
+                    // mid-verdict death (genuinely
+                    // undecidable); ACK-TIMEOUT ⟹ the
+                    // hold expired (Rust stalled >10s,
+                    // init may have reaped — staging
+                    // failure); EOF/error ⟹ the shell
+                    // died before its receipt (hold
+                    // UNPROVEN — staging failure, never a
+                    // silent clean skip); anything else ⟹
+                    // OUR script bug (loud). The shell
+                    // exits either way — no hang.
+                    let receipt = read_hold_receipt(&mut lines);
+                    drop(lines);
+                    let _ = sh.kill();
+                    let _ = sh.wait();
+                    _shguard.disarm();
+                    let _ = std::fs::remove_file(&flag);
+                    let _ = std::fs::remove_file(&ack);
+                    match receipt {
+                        HoldReceipt::Expired => {
+                            eprintln!(
+                                "skip: R21018-ACK-HOLD-EXPIRED occupant {pid}/{tick} died while \
+                                 the hold expired (Rust stalled >10s — init may have reaped) — \
+                                 staging failure, verdict untrustworthy, undecidable this run"
+                            );
+                        }
+                        HoldReceipt::Unproven => {
+                            eprintln!(
+                                "skip: R21018-HOLD-UNPROVEN occupant {pid}/{tick} changed \
+                                 mid-verdict and the shell died before emitting its hold \
+                                 receipt (hold neither clean nor timed-out — staging \
+                                 failure, undecidable this run)"
+                            );
+                        }
+                        HoldReceipt::ScriptBug => panic!(
+                            "shell script bug (R21018): the hold trailer printed an \
+                             unexpected line — the fix is in the script, not the verdict"
+                        ),
+                        HoldReceipt::Clean => {
+                            eprintln!(
+                                "skip: R21018-DIED-MID-VERDICT occupant {pid}/{tick} changed \
+                                 since the script's verdict (clean hold, stale evidence) — \
+                                 undecidable this run"
+                            );
+                        }
+                    }
+                    return;
+                }
+                HeldReapVerdict::UnreadableTrip { error } => panic!(
+                    "shell must reap the dead background child at a command boundary \
+                     (HELD occupant {pid}/{tick} present but unverifiable: {error})"
+                ),
+            }
+        }
         let done = lines.next().expect("done line").expect("done readable");
         assert_eq!(done.trim(), "DONE", "script must run to completion");
+        // XRV1-K7: classification is complete (REAPED, or
+        // HELD judged above) — release the shell.
+        std::fs::write(&ack, "ack\n").expect("ack released");
         let status = sh.wait().expect("shell exit");
         _shguard.disarm();
         assert!(status.success(), "shell must exit clean");
         let _ = std::fs::remove_file(&flag);
+        let _ = std::fs::remove_file(&ack);
     }
 
     /// R21-018: the rationale verdict must track BIRTH, not
@@ -14155,16 +15267,21 @@ mod tests {
         let flag =
             std::env::temp_dir().join(format!("scopebase-r21018-replace-{}", std::process::id()));
         let _ = std::fs::remove_file(&flag);
+        // XRV1-K7: classification acknowledgment (see the
+        // pin test — the shell holds until Rust ACKs).
+        let ack =
+            std::env::temp_dir().join(format!("scopebase-r21018-repack-{}", std::process::id()));
+        let _ = std::fs::remove_file(&ack);
         let mut sh = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg(shell_reap_probe_script("87", &flag))
+            .arg(shell_reap_probe_script("87", &flag, &ack, 200))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .spawn()
             .expect("sh spawns");
         // R21-009: guard at spawn (before any read).
-        let _shguard = FixtureGuard::new(sh.id() as libc::pid_t);
+        let mut _shguard = FixtureGuard::new(sh.id() as libc::pid_t);
         assert!(
             _shguard.tick.is_some(),
             "shell custody must pin (stage broken otherwise)"
@@ -14203,8 +15320,14 @@ mod tests {
             Some(child) => child,
             None => {
                 std::fs::write(&flag, "go\n").expect("rendezvous released");
+                // XRV1-K7: the shell now holds for ACK
+                // (never exits on its own fast path) — kill
+                // it outright (no hang, no line reads).
+                drop(lines);
+                let _ = sh.kill();
                 let _ = sh.wait();
                 let _ = std::fs::remove_file(&flag);
+                let _ = std::fs::remove_file(&ack);
                 eprintln!("skip: replacement steering contended");
                 return;
             }
@@ -14221,9 +15344,31 @@ mod tests {
             .expect("verdict readable");
         let done = lines.next().expect("done line").expect("done readable");
         assert_eq!(done.trim(), "DONE", "script must run to completion");
+        // XRV1-K7: verdict read — release the shell.
+        std::fs::write(&ack, "ack\n").expect("ack released");
+        // XRV1-L5/L18: drain the receipt trailer
+        // (the REAPED verdict below stands either way —
+        // it was observed pre-hold, so hold expiry
+        // cannot invalidate it — but the drained line
+        // must still be a KNOWN receipt (uniform
+        // protocol; a wrong extra line is our script
+        // bug, loud). EOF/pipe-error post-verdict is
+        // FINE here (unlike the mid-verdict arm): the
+        // verdict + retick evidence is already in hand,
+        // so a late shell death erases nothing.
+        match lines.next() {
+            None | Some(Err(_)) => {}
+            Some(Ok(line))
+                if line.trim() == "ACKED" || line.trim() == "ACK-TIMEOUT" => {}
+            Some(Ok(line)) => panic!(
+                "shell script bug (R21018): the hold trailer printed an unexpected \
+                 line ({line:?}) — the fix is in the script, not the verdict"
+            ),
+        }
         let status = sh.wait().expect("shell exit");
         assert!(status.success(), "shell must exit clean");
         let _ = std::fs::remove_file(&flag);
+        let _ = std::fs::remove_file(&ack);
         let _ = replacement.kill();
         let _ = replacement.wait();
         if retick == tick {
@@ -14238,6 +15383,382 @@ mod tests {
             "REAPED",
             "verdict must recognize the original-child reap across a replacement occupant"
         );
+    }
+
+    /// XRV1-K7 collateral (1/2 — verdict leg): a REAL
+    /// held zombie (killed, unreaped, same tick) trips
+    /// OursPersists through the full reader. Staged
+    /// deterministically WITHOUT dash cooperation (dash
+    /// cannot be forced to hold — it reaps eagerly when
+    /// unloaded): the victim self-stops (subshell
+    /// wrapper — the guard pins during the stop,
+    /// XRV1-L2), the victim is released and proven
+    /// exec'd, the shell is SIGSTOPed (a stopped shell
+    /// cannot reap), Rust kills the victim, and the
+    /// zombie is classified (empty argv ⟹ trip, state Z).
+    /// The shell blocks on `read < /dev/zero` (no spawns,
+    /// no CPU — a foreground `sleep` would orphan a
+    /// scan-visible stray at cleanup). Duration 823 is
+    /// unique to the K7 tests.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn shell_stopped_zombie_classifies_ours_persists() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        // XRV1-L2: the victim self-stops (`sh -c`
+        // background job — NOT a `( )` subshell: dash's
+        // `$$` in a subshell names the PARENT (the stop
+        // would land on dash itself). `&` forces the
+        // fork+exec, so $! names a top-level sh whose $$
+        // is its own pid — the stopped
+        // wrapper-that-becomes-sleep; the guard pins
+        // during the stop).
+        let mut sh = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("sh -c 'kill -STOP $$ || exit 99; exec sleep 823' & echo $!; read x < /dev/zero")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh spawns");
+        let shpid = sh.id() as libc::pid_t;
+        // R21-009: guard at spawn (before any read).
+        let mut _shguard = FixtureGuard::new(shpid);
+        assert!(
+            _shguard.tick.is_some(),
+            "shell custody must pin (stage broken otherwise)"
+        );
+        let mut lines = std::io::BufReader::new(sh.stdout.take().expect("sh stdout")).lines();
+        let pid: libc::pid_t = lines
+            .next()
+            .expect("pid line")
+            .expect("pid readable")
+            .trim()
+            .parse()
+            .expect("pid parses");
+        // XRV1-L2: T-await the VICTIM first (it
+        // self-stopped — the guard pins during the stop).
+        // Expiry retires the VICTIM by number first, then
+        // the shell (XRV1-L16: adoption does NOT CONT —
+        // an unreadable-but-actually-T wrapper orphaned
+        // to init would sit stopped forever (never runs,
+        // never exits, never reaped). The by-number kill
+        // is sound: the victim cannot exit (stopped, or
+        // pre-first-instruction never-ran — exit needs
+        // running, and its first instruction stops) ⟹
+        // unreaped ⟹ the number is ours. The victim dies
+        // (zombie under dash), then dash dies, then init
+        // reaps the zombie — retired, never stranded).
+        let victim_stop_end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if proc_state(pid) == Some('T') {
+                break;
+            }
+            if Instant::now() >= victim_stop_end {
+                // SAFETY: SIGKILL to our own staged
+                // victim (cannot-exit ⟹ number-held —
+                // see above); ESRCH-ignored (already
+                // gone ⟹ nothing to strand).
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+                let _ = sh.kill();
+                let _ = sh.wait();
+                _shguard.disarm();
+                panic!(
+                    "staging broken (victim never shows T: {0:?})",
+                    proc_state(pid)
+                );
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // XRV1-L8: victim cleanup custody BEFORE fallible
+        // staging (a STOP-denied panic below must not
+        // strand the live victim — the shell guard
+        // retires the shell only). The guard kills (its
+        // wait is a no-op — the victim is the shell's
+        // child, reaped by init after shell death).
+        // XRV1-L11: construct-retry (transient Unpinned
+        // (EMFILE/outage) retries bounded; persistent
+        // failure takes the unified expiry path above —
+        // victim-kill + shell-kill + loud).
+        let mut _victim_guard = {
+            let build_end = Instant::now() + Duration::from_secs(5);
+            loop {
+                let guard = KillReapGuard::new(pid);
+                if matches!(&guard.pin, GuardPin::Pinned { .. }) {
+                    break guard;
+                }
+                if matches!(&guard.pin, GuardPin::Discharged)
+                    || Instant::now() >= build_end
+                {
+                    // SAFETY: SIGKILL to our own staged
+                    // victim (T-proven stopped ⟹ held —
+                    // same cannot-exit argument).
+                    unsafe {
+                        libc::kill(pid, libc::SIGKILL);
+                    }
+                    let _ = sh.kill();
+                    let _ = sh.wait();
+                    _shguard.disarm();
+                    panic!("staging broken (victim guard will not pin)");
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        // Release the victim and prove it exec'd (a stuck
+        // wrapper must fail here — never a zombie of the
+        // wrong birth below).
+        cont_held_birth(pid);
+        await_exec_argv0(pid, "sleep");
+        // SAFETY: SIGSTOP to our own staged shell (sound
+        // by-number: the shell CANNOT exit — blocked on
+        // a /dev/zero read that never returns — so it is
+        // unreaped and the number cannot have recycled).
+        assert_eq!(
+            unsafe { libc::kill(shpid, libc::SIGSTOP) },
+            0,
+            "staging broken (shell unstoppable?)"
+        );
+        // XRV1-L8: the shell must PROVABLY reach T before
+        // the victim dies (a still-running shell could
+        // reap across the kill — racy staging).
+        let stop_end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if proc_state(shpid) == Some('T') {
+                break;
+            }
+            assert!(
+                Instant::now() < stop_end,
+                "staging broken (shell never shows T: {0:?})",
+                proc_state(shpid)
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // The shell is stopped ⟹ it cannot reap: the
+        // victim's zombie is HELD deterministically.
+        // SAFETY: SIGKILL to our own staged victim
+        // (guard-pinned during its stop; shell-held
+        // since — the number cannot have recycled).
+        assert_eq!(
+            unsafe { libc::kill(pid, libc::SIGKILL) },
+            0,
+            "staging broken (victim unkillable?)"
+        );
+        let end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if proc_state(pid) == Some('Z') {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "victim must zombify (still {0:?})",
+                proc_state(pid)
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let tick: u64 = proc_starttime(pid)
+            .expect("zombie stat readable")
+            .expect("zombie visible");
+        match classify_held_occupant(pid, tick, "sleep 823") {
+            HeldReapVerdict::OursPersists { state } => {
+                assert_eq!(state, "Z", "a held kill is a zombie: {state}")
+            }
+            other => panic!("a real held zombie must trip, got {other:?}"),
+        }
+        // Classified (XRV1-L3 order: stand down before
+        // the fallible shell teardown below — the victim
+        // reparents to init on shell death regardless).
+        _victim_guard.disarm();
+        drop(lines);
+        let _ = sh.kill();
+        let _ = sh.wait();
+        _shguard.disarm();
+        // The victim zombie reparents to init on shell
+        // death (reaped there — nothing of ours lingers).
+    }
+
+    /// XRV1-K7 collateral (2/2 — mechanism leg): the probe
+    /// script HOLDS past DONE until Rust ACKs (then exits
+    /// clean). Asserts the shell is still alive 500ms
+    /// after DONE (an unheld shell exits in µs-ms — the
+    /// pre-K7 shape fails here), then ACKs, requires
+    /// the ACKED receipt (XRV1-L18 Clean wire), and
+    /// reaps a clean exit. The verdict itself is NOT
+    /// judged (the pin owns it) — this pins
+    /// hold+release+receipt only.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn shell_ack_hold_releases_on_acknowledgment() {
+        use std::io::BufRead as _;
+        use std::time::{Duration, Instant};
+        let flag =
+            std::env::temp_dir().join(format!("scopebase-r21018-holdgo-{}", std::process::id()));
+        let _ = std::fs::remove_file(&flag);
+        std::fs::write(&flag, "go\n").expect("rendezvous pre-created");
+        let ack =
+            std::env::temp_dir().join(format!("scopebase-r21018-holdack-{}", std::process::id()));
+        let _ = std::fs::remove_file(&ack);
+        let mut sh = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(shell_reap_probe_script("823", &flag, &ack, 200))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh spawns");
+        let shpid = sh.id() as libc::pid_t;
+        // R21-009: guard at spawn (before any read).
+        let mut _shguard = FixtureGuard::new(shpid);
+        assert!(
+            _shguard.tick.is_some(),
+            "shell custody must pin (stage broken otherwise)"
+        );
+        let mut lines = std::io::BufReader::new(sh.stdout.take().expect("sh stdout")).lines();
+        for _ in 0..4 {
+            lines.next().expect("script line").expect("line readable");
+        }
+        // (XRV1-L5: no trailer read here — no verdict is
+        // judged, so hold expiry is moot; the shell exits
+        // on ACK and the unread pipe is dropped.)
+        // 500ms past DONE: the hold must keep the shell
+        // LIVE (the pre-K7 script exits here ⟹ zombie ⟹
+        // RED — 500ms is ~1000x the exit latency, so a
+        // pass means HELD, not slow). A state read, not
+        // kill-0 (kill-0 succeeds on an unreaped zombie —
+        // exactly the shape a hold-less exit leaves).
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        match proc_state(shpid) {
+            Some('Z') | None => panic!(
+                "shell must hold past DONE until ACKed \
+                 (exited early — no hold? state {0:?})",
+                proc_state(shpid)
+            ),
+            Some(_) => {}
+        }
+        std::fs::write(&ack, "ack\n").expect("ack released");
+        // XRV1-L18: the hold MUST receipt its release —
+        // an ACKed hold prints ACKED (Clean wire,
+        // end-to-end: script ⟹ pipe ⟹ helper).
+        assert_eq!(
+            read_hold_receipt(&mut lines),
+            HoldReceipt::Clean,
+            "acked hold must print its ACKED receipt"
+        );
+        let status = sh.wait().expect("shell exit");
+        _shguard.disarm();
+        assert!(status.success(), "shell must exit clean");
+        let _ = std::fs::remove_file(&flag);
+        let _ = std::fs::remove_file(&ack);
+    }
+
+    /// XRV1-L18 collateral (Unproven wire): a shell
+    /// killed between DONE and its receipt leaves EOF —
+    /// the hold is UNPROVEN (staging failure), never a
+    /// silent clean skip. Deterministic: no ack is ever
+    /// written (no ACKED can print) and SIGKILL lands in
+    /// ms (no 10s TIMEOUT can print) — the receipt read
+    /// sees EOF, always. Durations 816/817 are unique
+    /// to the receipt probes (repo-wide disjointness is
+    /// enforced by `sleep_scan_keys_disjoint_across_suites`).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn hold_receipt_unproven_when_shell_dies_pre_trailer() {
+        use std::io::BufRead as _;
+        let flag = std::env::temp_dir()
+            .join(format!("scopebase-r21018-unprov-{}", std::process::id()));
+        let _ = std::fs::remove_file(&flag);
+        std::fs::write(&flag, "go\n").expect("rendezvous pre-created");
+        let ack = std::env::temp_dir()
+            .join(format!("scopebase-r21018-unpack-{}", std::process::id()));
+        let _ = std::fs::remove_file(&ack);
+        let mut sh = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(shell_reap_probe_script("816", &flag, &ack, 200))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh spawns");
+        // R21-009: guard at spawn (before any read).
+        let mut _shguard = FixtureGuard::new(sh.id() as libc::pid_t);
+        assert!(
+            _shguard.tick.is_some(),
+            "shell custody must pin (stage broken otherwise)"
+        );
+        let mut lines = std::io::BufReader::new(sh.stdout.take().expect("sh stdout")).lines();
+        for _ in 0..3 {
+            lines.next().expect("script line").expect("line readable");
+        }
+        let done = lines.next().expect("done line").expect("done readable");
+        assert_eq!(done.trim(), "DONE", "script must run to completion");
+        // Kill BEFORE any receipt can print (no ack ⟹ no
+        // ACKED; SIGKILL in ms ⟹ no TIMEOUT) — the
+        // receipt read then sees EOF.
+        let _ = sh.kill();
+        assert_eq!(
+            read_hold_receipt(&mut lines),
+            HoldReceipt::Unproven,
+            "pre-trailer shell death must surface as UNPROVEN, never clean"
+        );
+        let _ = sh.wait();
+        _shguard.disarm();
+        let _ = std::fs::remove_file(&flag);
+        let _ = std::fs::remove_file(&ack);
+    }
+
+    /// XRV1-L18 collateral (Expired wire): a hold that
+    /// never sees its ack exhausts its loop and prints
+    /// ACK-TIMEOUT (Expired). Same script, same flag
+    /// logic — only the bound is 2 (≈0.1s) instead of
+    /// 200, so the timeout branch (unreachable in green
+    /// runs) is exercised every run.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn hold_receipt_expired_when_ack_never_arrives() {
+        use std::io::BufRead as _;
+        let flag = std::env::temp_dir()
+            .join(format!("scopebase-r21018-expire-{}", std::process::id()));
+        let _ = std::fs::remove_file(&flag);
+        std::fs::write(&flag, "go\n").expect("rendezvous pre-created");
+        let ack = std::env::temp_dir()
+            .join(format!("scopebase-r21018-expick-{}", std::process::id()));
+        let _ = std::fs::remove_file(&ack);
+        let mut sh = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(shell_reap_probe_script("817", &flag, &ack, 2))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("sh spawns");
+        // R21-009: guard at spawn (before any read).
+        let mut _shguard = FixtureGuard::new(sh.id() as libc::pid_t);
+        assert!(
+            _shguard.tick.is_some(),
+            "shell custody must pin (stage broken otherwise)"
+        );
+        let mut lines = std::io::BufReader::new(sh.stdout.take().expect("sh stdout")).lines();
+        for _ in 0..3 {
+            lines.next().expect("script line").expect("line readable");
+        }
+        let done = lines.next().expect("done line").expect("done readable");
+        assert_eq!(done.trim(), "DONE", "script must run to completion");
+        // NO ack (the hold exhausts its 2 iterations in
+        // ~0.1s and times out by itself).
+        assert_eq!(
+            read_hold_receipt(&mut lines),
+            HoldReceipt::Expired,
+            "unacked hold must print its ACK-TIMEOUT receipt"
+        );
+        let status = sh.wait().expect("shell exit");
+        _shguard.disarm();
+        assert!(status.success(), "shell must exit clean");
+        let _ = std::fs::remove_file(&flag);
+        let _ = std::fs::remove_file(&ack);
     }
 
     /// R22-020: discharge (not vacancy) — the sleeper's
@@ -19402,6 +20923,31 @@ mod tests {
         let _serial = AUDIT_STEER_SERIAL
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // R19003-FLAKE02 residual (2026-11-02, found in FLAKE01
+        // gate run 12): a frozen post-unwind sample may name a
+        // FOREIGN occupant — an ambient suite spawn
+        // frontier-retaking the just-freed number in the
+        // reap→sample window (run 12: triple arm read
+        // Ok(Some(_)) on a guard-retired birth). Gone-or-recycled
+        // (the R23-019 doctrine): None or a foreign tick proves
+        // OUR birth reaped; our own tick (or an unreadable row)
+        // fails loud with staged-vs-observed ticks so the gate
+        // stays a discriminating experiment. A disarmed guard
+        // still REDs (a leaked sleeper keeps the staged tick).
+        // Residual: a same-tick foreign birth misreads as ours
+        // (shared-jiffy exposure, as the obs arm documents).
+        let assert_reaped = |pid: libc::pid_t,
+                             tick: Option<u64>,
+                             state: Result<Option<u64>, String>,
+                             what: &str| {
+            match (&state, tick) {
+                (Ok(None), _) => {}
+                (Ok(Some(now)), Some(staged)) if *now != staged => {}
+                _ => panic!(
+                    "{what} must not leak sleeper {pid}: observed {state:?}, staged tick {tick:?}"
+                ),
+            }
+        };
         fn spawn_sleep(dur: &str) -> std::process::Child {
             std::process::Command::new("/bin/sleep")
                 .arg(dur)
@@ -19486,7 +21032,7 @@ mod tests {
             zombie_guard.disarm();
         }
         gated_retire();
-        assert_eq!(ostate, Ok(None), "obs failure must not leak the sleeper");
+        assert_reaped(opid, otick_slot.get(), ostate, "obs failure");
         // R19003-FLAKE02: no trailing fresh-read absence
         // assert — `ostate` is the ns-anchored retirement
         // proof; a later occupant is a foreign hint-thief
@@ -19559,7 +21105,7 @@ mod tests {
             zombie_guard.disarm();
         }
         gated_reap();
-        assert_eq!(zstate, Ok(None), "zombie failure must not leak the sleeper");
+        assert_reaped(zpid, ztick_slot.get(), zstate, "zombie failure");
         // R19003-FLAKE02: no trailing fresh-read absence
         // assert — `zstate` is the ns-anchored retirement
         // proof (same hint-thief exposure as obs).
@@ -19686,11 +21232,7 @@ mod tests {
         {
             retire_audit_child_silent(dpid);
         }
-        assert_eq!(
-            dstate,
-            Ok(None),
-            "decision failure must not leak the sleeper"
-        );
+        assert_reaped(dpid, dtick_slot.get(), dstate, "decision failure");
         // R19003-FLAKE02: no trailing fresh-read absence
         // assert — `dstate` is the ns-anchored retirement
         // proof (see helper docs).
@@ -19701,6 +21243,7 @@ mod tests {
         // stale first guard spares the second by design, so
         // the second needs independent custody).
         let aslot = std::cell::Cell::new(-1);
+        let atick_slot = std::cell::Cell::new(None);
         let bslot = std::cell::Cell::new(-1);
         let btick_slot = std::cell::Cell::new(None);
         let second = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -19709,8 +21252,23 @@ mod tests {
             let mut first = spawn_sleep("47");
             let apid = first.id() as libc::pid_t;
             aslot.set(apid);
+            // XRV1-F6: arm custody BEFORE the staging tick
+            // read — the expects below can unwind on an
+            // outage, and an unguarded Child drop neither
+            // kills nor waits (leaked sleeper). Disarmed
+            // after the explicit kill+wait below.
+            let mut _aguard = FixtureGuard::new(apid);
+            // Gone-or-recycled staging (residual fix): read
+            // the first birth's tick while it is our unreaped
+            // child (reservation holds — sound per R17-008).
+            atick_slot.set(Some(
+                proc_starttime(apid)
+                    .expect("first stat readable")
+                    .expect("first visible"),
+            ));
             let _ = first.kill();
             let _ = first.wait();
+            _aguard.disarm();
             bslot.set(spawn_sleep("47").id() as libc::pid_t);
             let bpid = bslot.get();
             let _bguard = FixtureGuard::new(bpid);
@@ -19731,8 +21289,8 @@ mod tests {
         {
             retire_audit_child_silent(bpid);
         }
-        assert_eq!(astate, Ok(None), "second arm must not leak the first");
-        assert_eq!(bstate, Ok(None), "second failure must not leak the second");
+        assert_reaped(apid, atick_slot.get(), astate, "second arm (first)");
+        assert_reaped(bpid, btick_slot.get(), bstate, "second failure");
         // R19003-FLAKE02: no trailing fresh-read absence
         // assert — `bstate` is the ns-anchored retirement
         // proof (see helper docs).
@@ -19769,20 +21327,17 @@ mod tests {
         assert_eq!(staged.len(), 3, "triple arm must stage three sleepers");
         let mut tstates = Vec::new();
         for (pid, tick) in &staged {
-            tstates.push((*pid, proc_starttime(*pid)));
+            tstates.push((*pid, *tick, proc_starttime(*pid)));
             if proc_starttime(*pid) == Ok(Some(*tick)) {
                 retire_audit_child_silent(*pid);
             }
         }
-        for (pid, state) in &tstates {
-            assert_eq!(
-                *state,
-                Ok(None),
-                "triple failure must not leak sleeper {pid}"
-            );
+        for (pid, tick, state) in &tstates {
+            assert_reaped(*pid, Some(*tick), state.clone(), "triple failure");
             // R19003-FLAKE02: no trailing fresh-read
             // absence assert — `state` is the ns-anchored
-            // retirement proof (see helper docs).
+            // retirement proof, read gone-or-recycled (see
+            // assert_reaped).
         }
         assert!(tripled.is_err(), "triple failure must report");
     }
@@ -24643,6 +26198,27 @@ mod tests {
             0,
             "middleman freeze"
         );
+        // R16010-FLAKE01: T-await the freeze (kill()==0
+        // QUEUES — it does not prove the stop landed. A
+        // middleman preempted in the exec→fork user window
+        // forks on reschedule BEFORE the pending stop
+        // processes — born-check and birth-watch then
+        // straddle the in-flight stop and the watch
+        // observes a writer (gate round-2 failure).
+        // Stopped ⟹ cannot fork ⟹ the born-check below
+        // is final).
+        let freeze_end = Instant::now() + Duration::from_secs(5);
+        loop {
+            if proc_state(mid) == Some('T') {
+                break;
+            }
+            assert!(
+                Instant::now() < freeze_end,
+                "staging broken (middleman never freezes: {0:?})",
+                proc_state(mid)
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
         let mut mid_guard = FixtureGuard::new(mid);
         // Writer unborn while frozen? (frozen ⇒ never born —
         // deterministic; born ⇒ contended skip, loud cleanup).
@@ -26511,14 +28087,27 @@ mod tests {
         base == b"sleep" && argv1 == dur.as_bytes()
     }
 
+    /// R22006-FLAKE01 (2026-11-02): /proc entry
+    /// absence covers ENOENT and ESRCH — a task exiting
+    /// between readdir and read surfaces as either
+    /// (observed: cmdline-read ESRCH on a reaped number
+    /// in lib gate run 8). Both prove the ENTRY's task
+    /// gone (never an outage: hidepid/EIO stay loud at
+    /// the call sites).
+    #[cfg(target_arch = "x86_64")]
+    fn proc_entry_gone(error: &std::io::Error) -> bool {
+        error.kind() == std::io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
+    }
+
     /// R23-008: ownership-scoped scan — the oracle shape
     /// plus the birth window (`tick >= anchor`; `>=`: a
     /// birth within the anchor's own tick is still ours).
     /// Kill paths pass a kill-time anchor; oracle callers
     /// use [`r22006_scan_sleep_with_dur`]. Read-error
-    /// discipline mirrors the custody scans (NotFound
-    /// skips; any other read error fails LOUD — never
-    /// certify absence over unreadable entries).
+    /// discipline mirrors the custody scans (NotFound or
+    /// ESRCH skips — see [`proc_entry_gone`]; any other
+    /// read error fails LOUD — never certify absence over
+    /// unreadable entries).
     /// Production callers use this (no hook); the R23-009
     /// regression uses
     /// [`r22006_scan_owned_sleep_with_dur_with_hook`].
@@ -26552,7 +28141,7 @@ mod tests {
             }
             let cmdline = match std::fs::read(format!("/proc/{name}/cmdline")) {
                 Ok(cmdline) => cmdline,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) if proc_entry_gone(&error) => continue,
                 Err(error) => {
                     panic!("R12 fallback: /proc/{name}/cmdline unreadable mid-scan: {error}")
                 }
@@ -26579,7 +28168,7 @@ mod tests {
                     // above (NotFound skips; else LOUD).
                     let cmdline2 = match std::fs::read(format!("/proc/{pid}/cmdline")) {
                         Ok(cmdline2) => cmdline2,
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(error) if proc_entry_gone(&error) => continue,
                         Err(error) => panic!(
                             "R12 fallback: /proc/{pid}/cmdline unreadable on re-verify: {error}"
                         ),
@@ -26598,7 +28187,19 @@ mod tests {
                     }
                 }
                 Ok(None) => continue,
-                Err(error) => panic!("R12 fallback: stat unreadable mid-scan: {error}"),
+                // Same race one step later (the entry's task
+                // exits between the cmdline and stat reads;
+                // proc_starttime folds that ESRCH into Err):
+                // re-probe — gone now => raced exit, skip;
+                // anything else (still present, still
+                // unreadable, or a transient now readable)
+                // => loud with the ORIGINAL error (the outage
+                // discipline is preserved; a live task is
+                // never skipped).
+                Err(error) => match std::fs::read(format!("/proc/{pid}/stat")) {
+                    Err(reprobe) if proc_entry_gone(&reprobe) => continue,
+                    _ => panic!("R12 fallback: stat unreadable mid-scan: {error}"),
+                },
             }
         }
         found
@@ -26638,7 +28239,7 @@ mod tests {
             }
             let cmdline = match std::fs::read(format!("/proc/{name}/cmdline")) {
                 Ok(cmdline) => cmdline,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) if proc_entry_gone(&error) => continue,
                 Err(error) => {
                     panic!("R12 fallback: /proc/{name}/cmdline unreadable mid-scan: {error}")
                 }
@@ -26654,7 +28255,7 @@ mod tests {
                 Ok(Some(tick)) => {
                     let cmdline2 = match std::fs::read(format!("/proc/{pid}/cmdline")) {
                         Ok(cmdline2) => cmdline2,
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(error) if proc_entry_gone(&error) => continue,
                         Err(error) => panic!(
                             "R12 fallback: /proc/{pid}/cmdline unreadable on re-verify: {error}"
                         ),
@@ -26673,7 +28274,19 @@ mod tests {
                     }
                 }
                 Ok(None) => continue,
-                Err(error) => panic!("R12 fallback: stat unreadable mid-scan: {error}"),
+                // Same race one step later (the entry's task
+                // exits between the cmdline and stat reads;
+                // proc_starttime folds that ESRCH into Err):
+                // re-probe — gone now => raced exit, skip;
+                // anything else (still present, still
+                // unreadable, or a transient now readable)
+                // => loud with the ORIGINAL error (the outage
+                // discipline is preserved; a live task is
+                // never skipped).
+                Err(error) => match std::fs::read(format!("/proc/{pid}/stat")) {
+                    Err(reprobe) if proc_entry_gone(&reprobe) => continue,
+                    _ => panic!("R12 fallback: stat unreadable mid-scan: {error}"),
+                },
             }
         }
         found
@@ -27393,15 +29006,16 @@ mod tests {
         // 1. Unrelated FIRST (stale by fallback time — the
         // 25 ms sleep crosses a jiffy boundary, so its tick
         // is strictly below the kill-time anchor).
-        let unrelated = std::process::Command::new("/bin/sleep")
-            .arg("870")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("staging broken (unrelated spawn)");
-        let upid = unrelated.id() as libc::pid_t;
-        let mut _uguard = KillOnlyGuard::new(upid);
+        // XRV1-L2: stopped-sleep (absolute argv0 — the
+        // scan matches /bin/sleep shape; settled exec'd
+        // — pre-exec sh undercounts scans). The handle is
+        // never waited (detached sole reaper below).
+        let (_unrelated, _utguard) = spawn_stopped_sh_with_guard("exec /bin/sleep 870");
+        let upid = _unrelated.id() as libc::pid_t;
+        await_exec_argv0(upid, "/bin/sleep");
+        // XRV1-J6: reap custody across the reaper
+        // install (a spawn panic must reap, not just
+        // kill) — transferred to kill-only below.
         // Detached SOLE reaper: the fallback's death-await
         // polls for tick-gone, but our own children zombie
         // (tick kept) until reaped. No other waiter may
@@ -27415,6 +29029,10 @@ mod tests {
                 libc::waitpid(upid, &mut status, 0);
             }
         });
+        // XRV1-J6 transfer: the sole reaper is installed
+        // (a drop-wait past here would be a second
+        // waiter) — kill-only from here on.
+        let mut _uguard = KillOnlyGuard::transfer_from(_utguard);
         let utick = proc_starttime(upid)
             .expect("staging broken (unrelated stat)")
             .expect("staging broken (unrelated visible)");
@@ -27425,16 +29043,14 @@ mod tests {
         let anchor = boot_ticks_now().expect("staging broken (boot clock)");
         // 2. The faulted fixture: a fresh sleep-870 of
         // unknown birth (the R12 shape — direct fallback,
-        // no line).
-        let fixture = std::process::Command::new("/bin/sleep")
-            .arg("870")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("staging broken (fixture spawn)");
-        let fpid = fixture.id() as libc::pid_t;
-        let mut _fguard = KillOnlyGuard::new(fpid);
+        // no line). XRV1-L2 stopped-sleep (settled — the
+        // scan below must see a sleep, not pre-exec sh).
+        let (_fixture, _ftguard) = spawn_stopped_sh_with_guard("exec /bin/sleep 870");
+        let fpid = _fixture.id() as libc::pid_t;
+        await_exec_argv0(fpid, "/bin/sleep");
+        // XRV1-J6: reap custody across the reaper
+        // install (a spawn panic must reap, not just
+        // kill) — transferred to kill-only below.
         // Same detached SOLE reaper as the unrelated (the
         // fallback kills the fixture — its death-await
         // needs the reap; the tail kills + polls, never
@@ -27446,6 +29062,10 @@ mod tests {
                 libc::waitpid(fpid, &mut status, 0);
             }
         });
+        // XRV1-J6 transfer: the sole reaper is installed
+        // (a drop-wait past here would be a second
+        // waiter) — kill-only from here on.
+        let mut _fguard = KillOnlyGuard::transfer_from(_ftguard);
         let ftick = proc_starttime(fpid)
             .expect("staging broken (fixture stat)")
             .expect("staging broken (fixture visible)");
@@ -27735,8 +29355,6 @@ mod tests {
     #[test]
     #[cfg(target_arch = "x86_64")]
     fn r23008_fallback_spares_post_anchor_foreign_session_sleeper() {
-        use std::os::unix::process::CommandExt as _;
-        use std::time::Duration;
         // Dedication first (the stranger's foreignness is
         // relative to OUR dedicated session).
         {
@@ -27752,26 +29370,18 @@ mod tests {
         let anchor = boot_ticks_now().expect("staging broken (boot clock)");
         // 1. Unrelated stranger in a THIRD session
         // (post-anchor, same euid, same shape — only the
-        // session filter excludes it).
-        let mut stranger_cmd = std::process::Command::new("/bin/sleep");
-        stranger_cmd
-            .arg("803")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        // SAFETY: setsid on the forked child pre-exec (not
-        // a group leader — inherits ours).
-        unsafe {
-            stranger_cmd.pre_exec(|| {
-                if libc::setsid() < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        let stranger = stranger_cmd.spawn().expect("staging broken (stranger spawn)");
-        let spid = stranger.id() as libc::pid_t;
-        let mut _sguard = KillOnlyGuard::new(spid);
+        // session filter excludes it). XRV1-L2:
+        // stopped-setsid-sleep (pre_exec setsid + self
+        // stop; settled — the oracle scan must judge a
+        // sleep's session, not pre-exec sh).
+        let (_stranger, _stguard) = spawn_stopped_sh_with_guard_setsid("exec /bin/sleep 803");
+        let spid = _stranger.id() as libc::pid_t;
+        await_exec_argv0(spid, "/bin/sleep");
+        // XRV1-J6: reap custody across staging (the
+        // getsid/stat/anchor asserts below can panic
+        // before the detached reaper installs — a panic
+        // must reap, not just kill) — transferred to
+        // kill-only once the sole reaper installs.
         // SAFETY: getsid queries only.
         let ssid = unsafe { libc::getsid(spid) };
         assert!(
@@ -27795,16 +29405,19 @@ mod tests {
                 libc::waitpid(spid, &mut status, 0);
             }
         });
+        // XRV1-J6 transfer: the sole reaper is installed
+        // (a drop-wait past here would be a second
+        // waiter) — kill-only from here on.
+        let mut _sguard = KillOnlyGuard::transfer_from(_stguard);
         // 2. Our own post-anchor fixture (our session).
-        let fixture = std::process::Command::new("/bin/sleep")
-            .arg("803")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("staging broken (fixture spawn)");
-        let fpid = fixture.id() as libc::pid_t;
-        let mut _fguard = KillOnlyGuard::new(fpid);
+        // XRV1-L2 stopped-sleep (settled — the oracle
+        // scan below must see a sleep).
+        let (_fixture, _ftguard) = spawn_stopped_sh_with_guard("exec /bin/sleep 803");
+        let fpid = _fixture.id() as libc::pid_t;
+        await_exec_argv0(fpid, "/bin/sleep");
+        // XRV1-J6: reap custody across the reaper
+        // install (a spawn panic must reap, not just
+        // kill) — transferred to kill-only below.
         // Same detached SOLE reaper as the stranger (the
         // fallback kills the fixture — its death-await
         // needs the reap; the tail kills + polls, never
@@ -27816,6 +29429,10 @@ mod tests {
                 libc::waitpid(fpid, &mut status, 0);
             }
         });
+        // XRV1-J6 transfer: the sole reaper is installed
+        // (a drop-wait past here would be a second
+        // waiter) — kill-only from here on.
+        let mut _fguard = KillOnlyGuard::transfer_from(_ftguard);
         let ftick = proc_starttime(fpid)
             .expect("staging broken (fixture stat)")
             .expect("staging broken (fixture visible)");
@@ -28269,18 +29886,22 @@ mod tests {
         let anchor = boot_ticks_now().expect("staging broken (boot clock)");
         // Held publisher (own child; guard + detached
         // reaper as usual — the fallback's drain polls
-        // for tick-gone).
-        let mut publisher = std::process::Command::new(pair_publisher_bin())
-            .arg("876")
-            .arg("wait")
-            .env("SCOPEBASE_PUBLISHER_PRE_SPAWN_HOLD", &flag)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .expect("staging broken (publisher spawn)");
+        // for tick-gone). XRV1-L2 stopped-publisher
+        // (sh-wrapped exec — argv/env/stdio identical;
+        // the HELD read below is the exec-settle).
+        let (mut publisher, _ptguard) = spawn_stopped_publisher(
+            "876",
+            "wait",
+            &[(
+                "SCOPEBASE_PUBLISHER_PRE_SPAWN_HOLD",
+                flag.to_str().expect("hold flag utf8"),
+            )],
+            false,
+        );
         let ppid = publisher.id() as libc::pid_t;
-        let mut _pguard = KillOnlyGuard::new(ppid);
+        // XRV1-J6: reap custody across the reaper
+        // install (a spawn panic must reap, not just
+        // kill) — transferred to kill-only below.
         std::thread::spawn(move || {
             let mut status = 0;
             // SAFETY: waitpid on the known own child; errors ignored.
@@ -28288,6 +29909,10 @@ mod tests {
                 libc::waitpid(ppid, &mut status, 0);
             }
         });
+        // XRV1-J6 transfer: the sole reaper is installed
+        // (a drop-wait past here would be a second
+        // waiter) — kill-only from here on.
+        let mut _pguard = KillOnlyGuard::transfer_from(_ptguard);
         let ptick = proc_starttime(ppid)
             .expect("staging broken (publisher stat)")
             .expect("staging broken (publisher visible)");
@@ -28376,8 +30001,10 @@ mod tests {
         let anchor = boot_ticks_now().expect("staging broken (boot clock)");
         // Grouped publisher (spawn-side pre_exec — the
         // group kill's precondition; its sleep child
-        // inherits the group at fork).
-        let mut publisher = spawn_self_grouped_publisher(
+        // inherits the group at fork). XRV1-L2 stopped
+        // (sh-wrapped exec — group set pre_exec in sh,
+        // preserved across the exec).
+        let (mut publisher, _ptguard) = spawn_stopped_self_grouped_publisher(
             "902",
             "wait",
             &[
@@ -28392,6 +30019,9 @@ mod tests {
             ],
         );
         let ppid = publisher.id() as libc::pid_t;
+        // XRV1-J6: reap custody across staging AND the
+        // reaper install (XRV1-K10: the group assert
+        // below can panic — the guard must arm FIRST).
         // Group precondition (staging — killpg's safety
         // rests on leadership).
         assert_eq!(
@@ -28399,7 +30029,6 @@ mod tests {
             Some(ppid),
             "staging broken (publisher must self-group)"
         );
-        let mut _pguard = KillOnlyGuard::new(ppid);
         std::thread::spawn(move || {
             let mut status = 0;
             // SAFETY: waitpid on the known own child; errors ignored.
@@ -28407,6 +30036,10 @@ mod tests {
                 libc::waitpid(ppid, &mut status, 0);
             }
         });
+        // XRV1-J6 transfer: the sole reaper is installed
+        // (a drop-wait past here would be a second
+        // waiter) — kill-only from here on.
+        let mut _pguard = KillOnlyGuard::transfer_from(_ptguard);
         let ptick = proc_starttime(ppid)
             .expect("staging broken (publisher stat)")
             .expect("staging broken (publisher visible)");
@@ -30602,6 +32235,2533 @@ else:
         }
     }
 
+    /// R19006-FLAKE01 (2026-11-02): theft-aware victim
+    /// drain for the R19-006 halves (shared — both tails
+    /// were identical). A concurrent retire's await can
+    /// reap OUR zombie via a stale-discovery waitpid on
+    /// OUR pair (threads share the child table — first
+    /// waiter wins; observed 1/40 full-lib runs). Returns
+    /// the status we drained (`Reaped`), theft evidence
+    /// when our wait never hit yet the zombie is
+    /// discharged (`Stolen`: gone or recycled — someone
+    /// else waited), or `Unverifiable` (XRV1-F4: unreadable
+    /// stat, or present past a second bound — the caller
+    /// fails inconclusive with cleanup custody RETAINED,
+    /// never skipping a possibly-live victim). A
+    /// still-present victim after a transient-blip break
+    /// gets a kill-retry plus a second BOUNDED drain
+    /// (XRV1-F5: never an unbounded blocking wait — a live
+    /// unkilled victim would hang it, and a concurrent
+    /// reap races it to ECHILD). All waits are
+    /// birth-bound on a pidfd pin (XRV1-G2): only the
+    /// exact victim birth can surface — a same-number
+    /// recycled sibling is invisible to the drain.
+    #[cfg(target_arch = "x86_64")]
+    enum VictimDrain {
+        Reaped(i32),
+        Stolen(String),
+        Unverifiable(String),
+    }
+
+    /// XRV1-G2: one WNOHANG waitid probe of a pinned
+    /// birth.
+    #[cfg(target_arch = "x86_64")]
+    enum PinProbe {
+        Reaped(i32),
+        NotReady,
+        ReapedElsewhere,
+        Unverifiable(String),
+    }
+
+    /// One WNOHANG waitid probe of the pinned victim
+    /// birth. waitid(P_PIDFD) reports ONLY this exact
+    /// birth — a same-number recycled sibling is
+    /// invisible to it (the waitpid-by-number it replaces
+    /// could reap a recycled sibling's status). The
+    /// reaped status is re-encoded to waitpid shape from
+    /// si_code/si_status (callers WIFSIGNALED-decode it).
+    #[cfg(target_arch = "x86_64")]
+    fn probe_victim_pin(pin_fd: libc::c_int) -> PinProbe {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // SAFETY: pidfd + zeroed siginfo + WNOHANG probe.
+        let ret = unsafe {
+            libc::waitid(
+                libc::P_PIDFD,
+                pin_fd as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG,
+            )
+        };
+        if ret == 0 {
+            // SAFETY: the struct was zeroed, so an
+            // untouched siginfo reads valid zero; a
+            // WEXITED report fills the _sigchld variant
+            // these accessors interpret.
+            if unsafe { info.si_pid() } == 0 {
+                return PinProbe::NotReady;
+            }
+            let code = info.si_code;
+            let status = unsafe { info.si_status() };
+            // Re-encode waitpid shape (see wait(2)):
+            // signaled deaths carry the signo (+ core
+            // bit); exits carry the code shifted.
+            let st = if code == libc::CLD_DUMPED {
+                (status & 0x7f) | 0x80
+            } else if code == libc::CLD_KILLED {
+                status & 0x7f
+            } else {
+                (status & 0xff) << 8
+            };
+            return PinProbe::Reaped(st);
+        }
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(libc::ECHILD) => PinProbe::ReapedElsewhere,
+            Some(libc::EINTR) => PinProbe::NotReady,
+            other => PinProbe::Unverifiable(format!("waitid on pin failed: {other:?}")),
+        }
+    }
+
+    /// XRV1-L9: waitid(P_PIDFD) capability probe
+    /// (UNCACHED — XRV1-L14: a OnceLock poisons across
+    /// fork (a fork during another thread's
+    /// initialization inherits RUNNING and hangs
+    /// forever); the probe costs 2 syscalls (~µs) and
+    /// runs rarely (per-test gates + per-guard
+    /// construction), so fork-safety by construction
+    /// beats caching).
+    /// Pinned cleanup REQUIRES reap-through-the-pin;
+    /// pidfd_open (5.3) without P_PIDFD waiting (5.4)
+    /// leaves a signaled zombie uncollectable — the L9
+    /// leak. The probe opens OUR OWN pidfd and issues a
+    /// waitid on it: success ⟹ supported; ECHILD ⟹
+    /// supported (the idtype DISPATCHED — self is merely
+    /// not waitable); ENOSYS/EINVAL on either call ⟹
+    /// unsupported (no P_PIDFD); anything else ⟹
+    /// unsupported (conservative — support unproven, so
+    /// guard tests skip LOUDLY rather than run degraded).
+    /// EINTR retries (bounded — a test alarm may
+    /// interrupt the probe itself). XRV1-L13: BOTH flag
+    /// sets are probed (cleanup consumes —
+    /// WEXITED|WNOHANG without WNOWAIT — while peeking
+    /// passes WNOWAIT; a flag-selective filter can deny
+    /// either). The consuming probe on RUNNING self
+    /// consumes nothing (nothing dead to report —
+    /// returns 0/si_pid==0 or ECHILD). Supported ⟺ both
+    /// dispatch.
+    #[cfg(target_arch = "x86_64")]
+    fn waitid_pidfd_supported() -> bool {
+        use std::os::unix::io::FromRawFd as _;
+        let pid = std::process::id() as libc::pid_t;
+        match super::super::seccomp::pidfd_open_raw(pid) {
+            Ok(fd) => {
+                let owned = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(fd) };
+                use std::os::unix::io::AsRawFd as _;
+                let raw = owned.as_raw_fd();
+                let consume = waitid_pidfd_flag_errno(raw, libc::WEXITED | libc::WNOHANG);
+                let peek =
+                    waitid_pidfd_flag_errno(raw, libc::WEXITED | libc::WNOHANG | libc::WNOWAIT);
+                waitid_probe_classify(None, consume, peek)
+            }
+            // The open arm dominates (unprobed sets pass
+            // None — classify ignores them).
+            Err(errno) => waitid_probe_classify(Some(errno), None, None),
+        }
+    }
+
+    /// XRV1-L15: the probe's errno→support decision,
+    /// pure (None ⟺ that step succeeded): open must
+    /// succeed; each flag set must succeed or ECHILD
+    /// (ECHILD proves the waitid DISPATCHED — self is
+    /// merely not-waitable). EINTR never reaches here
+    /// (retried at gathering). Pinned by
+    /// `waitid_probe_classification_maps_errno_decisions`.
+    #[cfg(target_arch = "x86_64")]
+    fn waitid_probe_classify(
+        open_errno: Option<i32>,
+        consume_errno: Option<i32>,
+        peek_errno: Option<i32>,
+    ) -> bool {
+        open_errno.is_none()
+            && matches!(consume_errno, None | Some(libc::ECHILD))
+            && matches!(peek_errno, None | Some(libc::ECHILD))
+    }
+
+    /// XRV1-L13: gather one flag set of the capability
+    /// probe (EINTR-retried, bounded): None ⟺ success;
+    /// Some(errno) otherwise (the CLASSIFY step decides
+    /// what each errno means — this gathers only).
+    #[cfg(target_arch = "x86_64")]
+    fn waitid_pidfd_flag_errno(fd: libc::c_int, flags: libc::c_int) -> Option<i32> {
+        for _ in 0..3 {
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            // SAFETY: own pidfd + zeroed siginfo + probe
+            // flags (WNOHANG — never blocks).
+            let ret = unsafe { libc::waitid(libc::P_PIDFD, fd as libc::id_t, &mut info, flags) };
+            if ret == 0 {
+                return None;
+            }
+            match std::io::Error::last_os_error().raw_os_error() {
+                Some(libc::EINTR) => continue,
+                other => return other,
+            }
+        }
+        Some(libc::EINTR)
+    }
+
+    /// XRV1-H1: peek whether the pinned birth is a zombie
+    /// dead by OUR SIGKILL (WNOWAIT — observed, never
+    /// consumed). True ONLY for CLD_KILLED with signo
+    /// SIGKILL (XRV1-I1: a death by another signal — a
+    /// SIGTERM landing between our state check and our
+    /// send, a core dump — was not caused by us, and its
+    /// status belongs to whoever reaps first, never us;
+    /// SIGKILL never dumps, so DUMPED is never ours).
+    /// CLD_EXITED, not-ready, reaped-elsewhere (ECHILD),
+    /// and errors all read false (observe-only / keep
+    /// polling).
+    #[cfg(target_arch = "x86_64")]
+    fn pin_peek_signaled(pin_fd: libc::c_int) -> bool {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // SAFETY: pidfd + zeroed siginfo + WNOHANG peek.
+        let ret = unsafe {
+            libc::waitid(
+                libc::P_PIDFD,
+                pin_fd as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if ret != 0 {
+            return false;
+        }
+        // SAFETY: as in probe_victim_pin — zeroed reads
+        // valid zero; a report fills _sigchld.
+        if unsafe { info.si_pid() } == 0 {
+            return false;
+        }
+        let code = info.si_code;
+        let status = unsafe { info.si_status() };
+        code == libc::CLD_KILLED && status == libc::SIGKILL
+    }
+
+    /// XRV1-K3: spawn a possibly instant-exit `sh`
+    /// body under a guard, SOUNDLY. Observation-anchored
+    /// construction (sample→open→verify) still admits a
+    /// descheduled mid-construction window (exit +
+    /// sweep-reap + recycle + same-jiffy re-observe pins
+    /// a stranger — the murder vector). A STOPPED child
+    /// cannot exit and cannot be reaped (waitpid without
+    /// WUNTRACED never reports stops — all three in-tree
+    /// sweeps use plain WNOHANG), so pinning a stopped
+    /// birth has no observation race at all. The stop is
+    /// POST-EXEC self-stop (`kill -STOP $$` as the body's
+    /// first command — NOT pre-exec: `Command::spawn`
+    /// blocks on its exec-error pipe until the child
+    /// execs, so a pre-exec stop deadlocks the spawn;
+    /// observed as a 30-minute wedge, fixed here): the
+    /// child cannot exit before running its first command
+    /// (nothing signals it in the exec→STOP window), the
+    /// T-await is a closed loop (bounded — expiry is
+    /// staging-broken, loud), the guard pins the
+    /// provably-unreaped birth, then SIGCONT releases a
+    /// PROVABLY-stopped child (a blind CONT races the
+    /// stop and strands it stopped). Returns the RUNNING
+    /// child + its guard. XRV1-L2: sleepers (`sleep N`)
+    /// MUST use this too (as `exec sleep N` — argv and
+    /// tick are post-exec-identical to a direct spawn;
+    /// nominal sleep duration is NO reservation — a
+    /// descheduled expiry plus an ambient in-process
+    /// sweep reaps and recycles before the sample, and
+    /// sample+open+verify then authenticate the
+    /// replacement). Every guarded birth is stopped at
+    /// pin time — `KillReapGuard::new` asserts T. The
+    /// `_held` variant returns the child STILL STOPPED
+    /// (for callers that must pin further oracle state
+    /// before release — CONT via [`cont_held_birth`]).
+    /// Non-`sh` instant-exit argv has no stopped spawn
+    /// (none exists in-tree — add a post-exec stop shape
+    /// with the argv).
+    /// The stopped-spawn `sh -c` text, shared (every
+    /// self-stop body — the L10 denial test exercises
+    /// the REAL text, never a copy). XRV1-L10: the stop
+    /// is CHECKED (`|| exit 99` — a denied stop must die
+    /// loud (99), never silently run the body: kill()
+    /// to self fails only under kill-denying seccomp
+    /// (the suite never self-confines — and kill() is
+    /// load-bearing suite-wide, so such a host voids the
+    /// suite generally — but a failed stop must never
+    /// silently proceed regardless). 99 is distinct from
+    /// every body exit (42/7/9).
+    #[cfg(target_arch = "x86_64")]
+    fn stopped_spawn_argv(body: &str) -> String {
+        format!("kill -STOP $$ || exit 99; {body}")
+    }
+
+    /// XRV1-L11: hold-read retry outcome (pure
+    /// decision — see `hold_read_retry`).
+    #[cfg(target_arch = "x86_64")]
+    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    enum HoldRead {
+        Proceed,
+        Retry,
+        PanicWrongState,
+        PanicOutage,
+    }
+
+    /// XRV1-L11: hold-read retry decision, pure (T
+    /// proceeds; any other OBSERVED state is never
+    /// transient ⟹ panic; unreadable retries in-bound).
+    /// Pinned by `hold_read_retry_decision_maps_outage_outcomes`.
+    #[cfg(target_arch = "x86_64")]
+    fn hold_read_retry(state: Option<char>, expired: bool) -> HoldRead {
+        match (state, expired) {
+            (Some('T'), _) => HoldRead::Proceed,
+            (Some(_), _) => HoldRead::PanicWrongState,
+            (None, false) => HoldRead::Retry,
+            (None, true) => HoldRead::PanicOutage,
+        }
+    }
+
+    /// XRV1-L11: construct-retry decision, pure
+    /// (Unpinned retries ONLY on a capable host —
+    /// transient EMFILE/outage; old-kernel returns
+    /// degraded; Discharged never retries). Pinned by
+    /// `construct_retry_decision_maps_pin_outcomes`.
+    #[cfg(target_arch = "x86_64")]
+    fn should_retry_construct(pin: &GuardPin, capable: bool) -> bool {
+        matches!(pin, GuardPin::Unpinned) && capable
+    }
+
+    /// XRV1-L12: discharge a held birth through its
+    /// handle (CONT + KILL + BOUNDED try_wait drain) —
+    /// best-effort retirement before a staging-broken
+    /// panic. Signaling errors are LOGGED, never ignored
+    /// (an ESRCH means already-reaped — discharged
+    /// either way); the drain is BOUNDED (a denied kill
+    /// plus a long body must not hang the suite — on
+    /// bound-expiry the birth is loud-reported and the
+    /// caller still panics).
+    #[cfg(target_arch = "x86_64")]
+    fn discharge_held_child(child: &mut std::process::Child, pid: libc::pid_t) {
+        // SAFETY: SIGCONT to our own unreaped child.
+        if unsafe { libc::kill(pid, libc::SIGCONT) } != 0 {
+            eprintln!(
+                "discharge: CONT to {pid} failed ({0:?} — already reaped?)",
+                std::io::Error::last_os_error().raw_os_error()
+            );
+        }
+        if let Err(error) = child.kill() {
+            eprintln!("discharge: kill to {pid} failed ({error:?} — already reaped?)");
+        }
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => {
+                    if std::time::Instant::now() >= end {
+                        eprintln!(
+                            "discharge: {pid} unreaped past 5s bound (denied kill + long body?)"
+                        );
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => {
+                    eprintln!("discharge: wait on {pid} failed ({error:?})");
+                    return;
+                }
+            }
+        }
+    }
+
+    /// XRV1-L2: T-await + pin a self-stopped child,
+    /// shared core (the child self-stops as its first
+    /// instruction — the ONLY sound hold: STOP-by-number
+    /// can land on a recycled stranger). Closed loop:
+    /// the child MUST show T (it cannot pass its own
+    /// first-command stop unstopped, and cannot exit
+    /// before running it). Expiry discharges through the
+    /// handle (XRV1-L4) and panics staging-broken loud.
+    /// XRV1-L11: construction retries transient
+    /// Unpinned (EMFILE/outage on a capable host —
+    /// absorbed, never CONTed unpinned); old-kernel
+    /// returns degraded (hygiene-only callers); post-hold
+    /// Discharged is impossible ⟹ discharge + loud.
+    /// Returns the guard with the child STILL STOPPED
+    /// (the caller CONTs via [`cont_held_birth`] when no
+    /// further pre-release pinning is needed).
+    #[cfg(target_arch = "x86_64")]
+    fn pin_stopped_child(child: &mut std::process::Child) -> KillReapGuard {
+        let pid = child.id() as libc::pid_t;
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match proc_state(pid) {
+                Some('T') => break,
+                other => {
+                    if std::time::Instant::now() >= end {
+                        // XRV1-L4: expiry must not abandon
+                        // a stopped child (no guard is
+                        // armed yet — dropping the handle
+                        // would leak it stopped-forever).
+                        // The birth is unreaped ⟹ ours
+                        // (it never ran — no zombie ever
+                        // existed for a sweep to take —
+                        // so the number cannot have
+                        // recycled).
+                        discharge_held_child(child, pid);
+                        panic!("staging broken (stopped child never shows T: {other:?})");
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        // Pinned while provably unreaped (stopped ⟹ no
+        // exit ⟹ no reap ⟹ ours) — with transient
+        // retry (the birth stays stopped throughout —
+        // nobody CONTs before return).
+        let build_end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let guard = KillReapGuard::new(pid);
+            if matches!(&guard.pin, GuardPin::Pinned { .. }) {
+                return guard;
+            }
+            if !should_retry_construct(&guard.pin, waitid_pidfd_supported()) {
+                if matches!(&guard.pin, GuardPin::Discharged) {
+                    // Impossible post-hold (a stopped
+                    // birth cannot be gone) ⟹ firing
+                    // means the model broke ⟹ loud (the
+                    // birth is T-proven-ours — discharge
+                    // first so the panic never strands).
+                    discharge_held_child(child, pid);
+                    panic!("staging broken (post-hold Discharged — model break?)");
+                }
+                // Old-kernel degraded (hygiene-only
+                // callers — the L9 gates keep verdicts
+                // off this path).
+                return guard;
+            }
+            if std::time::Instant::now() >= build_end {
+                discharge_held_child(child, pid);
+                panic!("staging broken (guard Unpinned past 5s on a capable host)");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    /// XRV1-L2: settle a released birth on its
+    /// post-exec argv (cmdline argv0 match — the exec
+    /// proof: a running state alone still shows pre-exec
+    /// sh, whose cmdline CONTAINS the duration and would
+    /// confuse dur scans). For stopped-spawned births
+    /// that a scan or argv assert reads (scans match
+    /// argv0~sleep — pre-exec sh matches nothing and
+    /// silently undercounts). Bounded — expiry is
+    /// staging-broken loud.
+    #[cfg(target_arch = "x86_64")]
+    fn await_exec_argv0(pid: libc::pid_t, argv0: &str) {
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut prefix = argv0.as_bytes().to_vec();
+        prefix.push(0);
+        loop {
+            let cmdline = std::fs::read(format!("/proc/{pid}/cmdline"))
+                .expect("staging broken (settle cmdline readable)");
+            if cmdline.starts_with(&prefix) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < end,
+                "staging broken (birth {pid} never execs to {argv0:?})"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    /// XRV1-L2: release a held birth (the CONT half of
+    /// the stopped-spawn handshake). ESRCH is impossible
+    /// (held ⟹ unreaped) — staging-broken loud, never
+    /// silent. A blind CONT races the stop and strands
+    /// the birth stopped — only CONT a T-awaited birth.
+    #[cfg(target_arch = "x86_64")]
+    fn cont_held_birth(pid: libc::pid_t) {
+        // SAFETY: SIGCONT to our own stopped child.
+        assert_eq!(
+            unsafe { libc::kill(pid, libc::SIGCONT) },
+            0,
+            "staging broken (CONT refused on stopped child)"
+        );
+    }
+
+    /// XRV1-L2: open an oracle pidfd over a HELD birth
+    /// (T-awaited — a try_wait(None) alone does not bind
+    /// the open: the birth can exit and an ambient sweep
+    /// can reap+recycle between the check and the open).
+    /// The T-assert is the binding (stopped ⟹ unreaped
+    /// ⟹ ours). Errors carry the errno (the caller's
+    /// skip path reports it).
+    #[cfg(target_arch = "x86_64")]
+    fn pidfd_open_held(pid: libc::pid_t) -> Result<std::os::unix::io::OwnedFd, i32> {
+        use std::os::unix::io::FromRawFd as _;
+        assert_eq!(
+            proc_state(pid),
+            Some('T'),
+            "staging broken (oracle requires a held birth — self-stop + T-await first)"
+        );
+        super::super::seccomp::pidfd_open_raw(pid)
+            .map(|fd| unsafe { std::os::unix::io::OwnedFd::from_raw_fd(fd) })
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn spawn_stopped_sh_with_guard(body: &str) -> (std::process::Child, KillReapGuard) {
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(stopped_spawn_argv(body))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("staging broken (stopped spawn)");
+        let pid = child.id() as libc::pid_t;
+        let guard = pin_stopped_child(&mut child);
+        cont_held_birth(pid);
+        // The child runs the body now (it may exit fast —
+        // the guard is established, so later recycle is
+        // handled by the guard's arms, not by pinning).
+        // No status touch here (the caller owns the reap).
+        (child, guard)
+    }
+
+    /// XRV1-L2: stopped spawn that returns the child
+    /// STILL STOPPED (same self-stop body shape — for
+    /// callers that must pin further oracle state (their
+    /// own pidfd via [`pidfd_open_held`]) before release;
+    /// CONT via [`cont_held_birth`] when pinning is
+    /// done). The returned guard covers the held window
+    /// (staging panics before CONT retire a stopped
+    /// birth — SIGKILL lands on stopped).
+    #[cfg(target_arch = "x86_64")]
+    fn spawn_stopped_sh_with_guard_held(body: &str) -> (std::process::Child, KillReapGuard) {
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(stopped_spawn_argv(body))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("staging broken (stopped spawn)");
+        let guard = pin_stopped_child(&mut child);
+        (child, guard)
+    }
+
+    /// XRV1-L2: stopped spawn into a NEW session
+    /// (pre_exec setsid + self-stop body — for the
+    /// third-session stranger: the stop must be
+    /// self-inflicted (STOP-by-number can land on a
+    /// recycled stranger) and setsid(1) would fork on
+    /// group-leader (pid change under the pin), so the
+    /// session op runs pre_exec (post-fork, pre-exec —
+    /// syscall-only) and the stop runs post-exec in sh.
+    /// setsid(2) fails EPERM only for a group leader;
+    /// the child inherits the test's group (whose leader
+    /// is a live ancestor) ⟹ direct success, never a
+    /// fork. Returns RUNNING + guard.
+    #[cfg(target_arch = "x86_64")]
+    fn spawn_stopped_sh_with_guard_setsid(body: &str) -> (std::process::Child, KillReapGuard) {
+        use std::os::unix::process::CommandExt as _;
+        let mut command = std::process::Command::new("sh");
+        command
+            .arg("-c")
+            .arg(stopped_spawn_argv(body))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        // SAFETY: setsid on the forked child pre-exec
+        // (not a group leader — inherits ours).
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let mut child = command
+            .spawn()
+            .expect("staging broken (setsid stopped spawn)");
+        let pid = child.id() as libc::pid_t;
+        let guard = pin_stopped_child(&mut child);
+        cont_held_birth(pid);
+        (child, guard)
+    }
+
+    /// XRV1-L2: stopped spawn of the controlled pair
+    /// publisher (sh-wrapped `exec` — the bin cannot
+    /// self-stop, so sh stops first and the pin's birth
+    /// tick survives the exec; argv/env/stdio identical
+    /// to a direct spawn). Args are single-quoted into
+    /// the sh body (fail-closed on embedded quotes —
+    /// staging-broken, never an injection). Returns
+    /// RUNNING + guard.
+    #[cfg(target_arch = "x86_64")]
+    fn spawn_stopped_publisher(
+        secs: &str,
+        tail: &str,
+        envs: &[(&str, &str)],
+        pipe_stderr: bool,
+    ) -> (std::process::Child, KillReapGuard) {
+        let bin = pair_publisher_bin();
+        let bin_text = bin.to_str().expect("publisher path utf8");
+        for piece in std::iter::once(bin_text)
+            .chain(std::iter::once(secs))
+            .chain(std::iter::once(tail))
+        {
+            assert!(
+                !piece.contains('\''),
+                "staging broken (publisher arg unquotable: {piece:?})"
+            );
+        }
+        let mut command = std::process::Command::new("sh");
+        command
+            .arg("-c")
+            .arg(stopped_spawn_argv(&format!(
+                "exec '{bin_text}' '{secs}' '{tail}'"
+            )))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(if pipe_stderr {
+                std::process::Stdio::piped()
+            } else {
+                std::process::Stdio::null()
+            });
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        let mut child = command
+            .spawn()
+            .expect("staging broken (publisher stopped spawn)");
+        let pid = child.id() as libc::pid_t;
+        let guard = pin_stopped_child(&mut child);
+        cont_held_birth(pid);
+        (child, guard)
+    }
+
+    /// XRV1-L2: stopped spawn of the controlled pair
+    /// publisher self-grouped (pre_exec setpgid + sh
+    /// self-stop + exec — the R19-015 rule (pgid ==
+    /// publisher pid from microseconds after the fork)
+    /// holds: setpgid runs pre_exec in sh, and the exec
+    /// preserves pid+group). Stdout AND stderr piped
+    /// (read stderr only after group cleanup — see
+    /// [`spawn_self_grouped_publisher`]). Returns RUNNING
+    /// + guard.
+    #[cfg(target_arch = "x86_64")]
+    fn spawn_stopped_self_grouped_publisher(
+        secs: &str,
+        tail: &str,
+        envs: &[(&str, &str)],
+    ) -> (std::process::Child, KillReapGuard) {
+        use std::os::unix::process::CommandExt as _;
+        let bin = pair_publisher_bin();
+        let bin_text = bin.to_str().expect("publisher path utf8");
+        for piece in std::iter::once(bin_text)
+            .chain(std::iter::once(secs))
+            .chain(std::iter::once(tail))
+        {
+            assert!(
+                !piece.contains('\''),
+                "staging broken (publisher arg unquotable: {piece:?})"
+            );
+        }
+        let mut command = std::process::Command::new("sh");
+        command
+            .arg("-c")
+            .arg(stopped_spawn_argv(&format!(
+                "exec '{bin_text}' '{secs}' '{tail}'"
+            )))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        // SAFETY: setpgid on self pre-exec, no userspace state.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+        let mut child = command
+            .spawn()
+            .expect("self-grouped publisher stopped spawn");
+        let pid = child.id() as libc::pid_t;
+        let guard = pin_stopped_child(&mut child);
+        cont_held_birth(pid);
+        (child, guard)
+    }
+
+    /// XRV1-H1 collateral: a naturally-exited birth (exit
+    /// 42, the reviewer's isolated check) peeks NOT
+    /// signaled — and its status SURVIVES the peek for its
+    /// owner (no theft).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn pin_peek_spares_natural_exit_status() {
+        // XRV1-L9: the verdict peeks through a pin — no
+        // pin without both capabilities.
+        if !waitid_pidfd_supported() {
+            eprintln!("skip: waitid(P_PIDFD) unavailable (pin verdict untestable)");
+            return;
+        }
+        // XRV1-H6 shape: cleanup custody from spawn —
+        // HELD (XRV1-L2: the oracle pin below must open
+        // during the initial stop — a post-CONT open
+        // races exit + ambient-sweep reap + recycle).
+        let (mut child, mut _kguard) = spawn_stopped_sh_with_guard_held("exit 42");
+        let pid = child.id() as libc::pid_t;
+        let pin = match pidfd_open_held(pid) {
+            Ok(pin) => pin,
+            Err(errno) => {
+                if _kguard.skip_discharge(&mut child) {
+                    _kguard.disarm();
+                } else {
+                    eprintln!("pin-test skip-path cleanup unresolved — guard stays armed");
+                }
+                eprintln!("skip: pidfd_open unavailable (errno {errno})");
+                return;
+            }
+        };
+        cont_held_birth(pid);
+        use std::os::unix::io::AsRawFd as _;
+        let pin_fd = pin.as_raw_fd();
+        // Settle zombie WITHOUT reaping (state reads only).
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while proc_state(pid) != Some('Z') {
+            assert!(
+                std::time::Instant::now() < end,
+                "exiter must zombify (still {0:?})",
+                proc_state(pid)
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            !pin_peek_signaled(pin_fd),
+            "a natural exit must never peek signaled (else the await would steal it)"
+        );
+        // The owner's status survived our peek, intact.
+        let status = child.wait().expect("owner reaps");
+        _kguard.disarm();
+        assert_eq!(status.code(), Some(42), "exit status must survive the peek");
+    }
+
+    /// XRV1-H1 collateral: a SIGKILLed birth peeks
+    /// signaled (the await may consume it).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn pin_peek_admits_signaled_death() {
+        use std::os::unix::process::ExitStatusExt as _;
+        // XRV1-L9: the verdict peeks through a pin — no
+        // pin without both capabilities.
+        if !waitid_pidfd_supported() {
+            eprintln!("skip: waitid(P_PIDFD) unavailable (pin verdict untestable)");
+            return;
+        }
+        // XRV1-L2: HELD stopped-sleep (guard + oracle pin
+        // during the stop; CONT once pinned — the victim
+        // must run to be killed).
+        let (mut child, mut _kguard) = spawn_stopped_sh_with_guard_held("exec sleep 30");
+        let pid = child.id() as libc::pid_t;
+        let pin = match pidfd_open_held(pid) {
+            Ok(pin) => pin,
+            Err(errno) => {
+                if _kguard.skip_discharge(&mut child) {
+                    _kguard.disarm();
+                } else {
+                    eprintln!("pin-test skip-path cleanup unresolved — guard stays armed");
+                }
+                eprintln!("skip: pidfd_open unavailable (errno {errno})");
+                return;
+            }
+        };
+        cont_held_birth(pid);
+        use std::os::unix::io::AsRawFd as _;
+        let pin_fd = pin.as_raw_fd();
+        child.kill().expect("kill lands");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if pin_peek_signaled(pin_fd) {
+                break;
+            }
+            assert!(std::time::Instant::now() < end, "victim must die signaled");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // Sole consumer: reap via the handle (the pin only
+        // peeked — WNOWAIT consumed nothing).
+        let status = child.wait().expect("owner reaps");
+        _kguard.disarm();
+        assert!(
+            status.signal() == Some(libc::SIGKILL),
+            "signaled death must survive the peek (status {status:?})"
+        );
+    }
+
+    /// XRV1-I1 collateral: a SIGTERM death peeks NOT
+    /// signaled-ours (another signal's status is never
+    /// ours to consume — the reviewer's isolated check).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn pin_peek_spares_foreign_signal_death() {
+        use std::os::unix::process::ExitStatusExt as _;
+        // XRV1-L9: the verdict peeks through a pin — no
+        // pin without both capabilities.
+        if !waitid_pidfd_supported() {
+            eprintln!("skip: waitid(P_PIDFD) unavailable (pin verdict untestable)");
+            return;
+        }
+        // XRV1-L2: HELD stopped-sleep (guard + oracle pin
+        // during the stop; CONT once pinned).
+        let (mut child, mut _kguard) = spawn_stopped_sh_with_guard_held("exec sleep 30");
+        let pid = child.id() as libc::pid_t;
+        let pin = match pidfd_open_held(pid) {
+            Ok(pin) => pin,
+            Err(errno) => {
+                if _kguard.skip_discharge(&mut child) {
+                    _kguard.disarm();
+                } else {
+                    eprintln!("pin-test skip-path cleanup unresolved — guard stays armed");
+                }
+                eprintln!("skip: pidfd_open unavailable (errno {errno})");
+                return;
+            }
+        };
+        cont_held_birth(pid);
+        use std::os::unix::io::AsRawFd as _;
+        let pin_fd = pin.as_raw_fd();
+        assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0, "term lands");
+        // Settle zombie WITHOUT reaping (state reads only).
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while proc_state(pid) != Some('Z') {
+            assert!(
+                std::time::Instant::now() < end,
+                "termed birth must zombify (still {0:?})",
+                proc_state(pid)
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            !pin_peek_signaled(pin_fd),
+            "a SIGTERM death must never peek signaled-ours (else the await would steal it)"
+        );
+        // The owner's status survived our peek, intact.
+        let status = child.wait().expect("owner reaps");
+        _kguard.disarm();
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGTERM),
+            "foreign signal must survive the peek (status {status:?})"
+        );
+    }
+
+    /// XRV1-J1 collateral: deterministic status-theft
+    /// proof — the guard's drop over a sweep-reaped birth
+    /// must not consume a recycled same-tick zombie's
+    /// status. Staging (userns+pidns+mountns, all
+    /// rootless): `ns_last_pid` (writable as userns-root)
+    /// forces PID recycle; jiffy-edge sync + tick verify
+    /// forces same-tick; pure fork (no exec) keeps the
+    /// pair inside one jiffy. The scenario runs in a
+    /// twice-forked child (the middle fork is a
+    /// malloc-free raw-syscall zone — fork in a threaded
+    /// test binary — the inner child is single-threaded
+    /// and runs full Rust); the verdict crosses a pipe.
+    /// Bad control: the same staging with a bare numeric
+    /// waitpid MUST steal (a non-stealing bad control is
+    /// broken staging — fail loud, never a vacuous
+    /// green). Unstageable hosts (no userns, read-only
+    /// sysctl, unalignable clock) skip loud.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn kill_reap_guard_drop_spares_sweep_recycled_status() {
+        // SAFETY: pipe/fork/waitpid raw; the fork children
+        // _exit (never return into the harness).
+        let mut pipe = [0; 2];
+        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0, "pipe");
+        let first = unsafe { libc::fork() };
+        assert!(first >= 0, "fork must succeed");
+        if first == 0 {
+            j1_theft_middle(pipe[0], pipe[1]);
+        }
+        unsafe { libc::close(pipe[1]) };
+        let mut verdict = String::new();
+        {
+            use std::io::Read as _;
+            use std::os::unix::io::FromRawFd as _;
+            let mut reader = unsafe { std::fs::File::from_raw_fd(pipe[0]) };
+            reader
+                .read_to_string(&mut verdict)
+                .expect("verdict readable");
+        }
+        let mut status = 0;
+        // SAFETY: our own fork-child, blocking.
+        let got = unsafe { libc::waitpid(first, &mut status, 0) };
+        assert_eq!(got, first, "middle child reaped");
+        assert!(
+            libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
+            "middle child must exit clean (status {status})"
+        );
+        if let Some(reason) = verdict.strip_prefix("SKIP ") {
+            eprintln!("skip: J1 theft staging unavailable ({reason})");
+            return;
+        }
+        let mut main = "";
+        let mut bad = "";
+        for line in verdict.lines() {
+            if let Some(rest) = line.strip_prefix("MAIN ") {
+                main = rest;
+            }
+            if let Some(rest) = line.strip_prefix("BAD ") {
+                bad = rest;
+            }
+        }
+        assert_eq!(
+            bad, "stole",
+            "bad control must steal (else staging never aligned recycle+tick: {verdict:?})"
+        );
+        assert_eq!(
+            main, "ok",
+            "guard drop over a sweep-reaped birth must spare the recycled status ({verdict:?})"
+        );
+    }
+
+    /// XRV1-L6: alarm suicide handler (shared by the
+    /// J1 scenario child and the plumbing test): a pidns
+    /// init IGNORES default-disposition SIGALRM (fatal
+    /// signals without handlers never land on any init —
+    /// init must install a handler), so the scenario's
+    /// deadline needs this installed handler, and the
+    /// handler _exits (returning would resume into
+    /// std's EINTR-retried reads — the hang would
+    /// continue). Async-signal-safe (bare _exit, no
+    /// captures) — callable from malloc-free fork
+    /// children.
+    #[cfg(target_arch = "x86_64")]
+    extern "C" fn j6_alarm_suicide(_signal: libc::c_int) {
+        unsafe { libc::_exit(60) };
+    }
+
+    /// XRV1-L6 collateral: the alarm-suicide plumbing —
+    /// a fork child (NOT init — the init case is
+    /// structural: same install, same handler) that
+    /// installs the suicide handler, arms alarm(1), and
+    /// pauses must exit 60 via the handler (proving
+    /// install+delivery+suicide, not merely that alarm()
+    /// was called). Deterministic (no timing: pause
+    /// sleeps until the 1s delivery). The fork child is
+    /// malloc-free (sigaction/alarm/pause/_exit only —
+    /// sound in a threaded test binary). XRV1-L20: the
+    /// parent blocks SIGALRM before forking (the child
+    /// INHERITS a blocked mask — installing a handler
+    /// does NOT unblock it) and the child must unblock
+    /// explicitly; the parent's wait is BOUNDED (a
+    /// wedged child fails loud, never hangs).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn alarm_handler_suicides_hung_child() {
+        // XRV1-L20: inherit-blocked mask (restored
+        // immediately post-fork — never leaked into the
+        // harness).
+        let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
+        let mut saved: libc::sigset_t = unsafe { std::mem::zeroed() };
+        // SAFETY: zeroed sigset in/out params.
+        unsafe {
+            libc::sigemptyset(&mut blocked);
+            libc::sigaddset(&mut blocked, libc::SIGALRM);
+            libc::pthread_sigmask(libc::SIG_BLOCK, &blocked, &mut saved);
+        }
+        // SAFETY: fork in a threaded binary — the child
+        // path below is malloc-free and _exits (never
+        // returns into the harness); the parent waitpids.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork must succeed");
+        if pid == 0 {
+            unsafe {
+                let mut action: libc::sigaction = std::mem::zeroed();
+                action.sa_sigaction = j6_alarm_suicide as usize;
+                libc::sigemptyset(&mut action.sa_mask);
+                action.sa_flags = 0;
+                if libc::sigaction(libc::SIGALRM, &action, std::ptr::null_mut()) != 0 {
+                    libc::_exit(61);
+                }
+                // XRV1-L20: unblock SIGALRM explicitly
+                // (installing a handler does NOT unblock
+                // an inherited mask — malloc-free,
+                // async-signal-safe).
+                let mut unblock: libc::sigset_t = std::mem::zeroed();
+                libc::sigemptyset(&mut unblock);
+                libc::sigaddset(&mut unblock, libc::SIGALRM);
+                if libc::pthread_sigmask(libc::SIG_UNBLOCK, &unblock, std::ptr::null_mut())
+                    != 0
+                {
+                    libc::_exit(63);
+                }
+                libc::alarm(1);
+                libc::pause();
+                // The handler _exits — reaching here
+                // means delivery failed.
+                libc::_exit(62);
+            }
+        }
+        // Parent-only restore (the child above never
+        // falls through — every path _exits — so the
+        // child keeps the inherit-blocked mask while the
+        // harness never sees it).
+        // SAFETY: saved parent mask.
+        unsafe {
+            libc::pthread_sigmask(libc::SIG_SETMASK, &saved, std::ptr::null_mut());
+        }
+        // Bounded supervisor wait (a mask-wedged child
+        // must fail loud here, never hang the suite).
+        let mut status = 0;
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            // SAFETY: our own fork-child, WNOHANG poll.
+            let got = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if got == pid {
+                break;
+            }
+            assert!(got >= 0, "suicide wait must not error");
+            if std::time::Instant::now() >= end {
+                // SAFETY: our own fork-child.
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                    libc::waitpid(pid, &mut status, 0);
+                }
+                panic!("alarm child wedged past 10s (masked SIGALRM?)");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(
+            libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 60,
+            "alarm handler must suicide the hung child (status {status})"
+        );
+    }
+
+    /// XRV1-J1 staging, middle fork: enters the namespaces
+    /// (user+pid+mount — the pidns applies to OUR
+    /// children) and forks the single-threaded scenario
+    /// runner. MALLOC-FREE ZONE (forked from a threaded
+    /// test binary): raw syscalls + stack buffers only —
+    /// no format!/String/panic!/assert! (all allocate);
+    /// failures write a static SKIP line to the pipe and
+    /// _exit(0); logic violations _exit nonzero. Never
+    /// returns.
+    #[cfg(target_arch = "x86_64")]
+    fn j1_theft_middle(pipe_read: libc::c_int, pipe_write: libc::c_int) -> ! {
+        // SAFETY: all calls below are async-signal-safe
+        // raw syscalls; buffers are stack-local.
+        unsafe {
+            libc::close(pipe_read);
+            // u32 -> decimal into a stack buffer; returns
+            // the filled length.
+            fn push_u32(buf: &mut [u8; 64], mut at: usize, mut value: u32) -> usize {
+                let mut digits = [0u8; 10];
+                let mut len = 0;
+                if value == 0 {
+                    digits[0] = b'0';
+                    len = 1;
+                }
+                while value > 0 {
+                    digits[len] = b'0' + (value % 10) as u8;
+                    value /= 10;
+                    len += 1;
+                }
+                let mut i = len;
+                while i > 0 {
+                    i -= 1;
+                    buf[at] = digits[i];
+                    at += 1;
+                }
+                at
+            }
+            // Write the whole buffer (short helper — the
+            // payloads are tiny; partial writes retry).
+            unsafe fn write_all(fd: libc::c_int, mut ptr: *const u8, mut len: usize) -> bool {
+                while len > 0 {
+                    let wrote = libc::write(fd, ptr as *const libc::c_void, len);
+                    if wrote <= 0 {
+                        return false;
+                    }
+                    ptr = ptr.add(wrote as usize);
+                    len -= wrote as usize;
+                }
+                true
+            }
+            unsafe fn skip_out(pipe_write: libc::c_int, reason: &[u8]) -> ! {
+                let _ = write_all(pipe_write, c"SKIP ".as_ptr() as *const u8, 5);
+                let _ = write_all(pipe_write, reason.as_ptr(), reason.len());
+                let _ = write_all(pipe_write, c"\n".as_ptr() as *const u8, 1);
+                libc::_exit(0);
+            }
+            // Identity FIRST (pre-unshare: after the
+            // unshare getuid reports the overflow id and
+            // the map write is refused).
+            let euid = libc::getuid();
+            let egid = libc::getgid();
+            if libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWPID | libc::CLONE_NEWNS) != 0 {
+                skip_out(pipe_write, b"unshare refused");
+            }
+            // Identity maps (deny setgroups first — else
+            // the gid map is refused).
+            let setgroups = libc::open(
+                c"/proc/self/setgroups".as_ptr(),
+                libc::O_WRONLY | libc::O_CLOEXEC,
+            );
+            if setgroups >= 0 {
+                let _ = write_all(setgroups, c"deny\n".as_ptr() as *const u8, 5);
+                libc::close(setgroups);
+            }
+            let mut map = [0u8; 64];
+            let mut at = push_u32(&mut map, 0, 0);
+            map[at] = b' ';
+            at = push_u32(&mut map, at + 1, euid);
+            map[at] = b' ';
+            at = push_u32(&mut map, at + 1, 1);
+            map[at] = b'\n';
+            at += 1;
+            let uid_map = libc::open(
+                c"/proc/self/uid_map".as_ptr(),
+                libc::O_WRONLY | libc::O_CLOEXEC,
+            );
+            if uid_map < 0 || !write_all(uid_map, map.as_ptr(), at) || libc::close(uid_map) != 0 {
+                skip_out(pipe_write, b"uid_map refused");
+            }
+            let mut gmap = [0u8; 64];
+            let mut gat = push_u32(&mut gmap, 0, 0);
+            gmap[gat] = b' ';
+            gat = push_u32(&mut gmap, gat + 1, egid);
+            gmap[gat] = b' ';
+            gat = push_u32(&mut gmap, gat + 1, 1);
+            gmap[gat] = b'\n';
+            gat += 1;
+            let gid_map = libc::open(
+                c"/proc/self/gid_map".as_ptr(),
+                libc::O_WRONLY | libc::O_CLOEXEC,
+            );
+            if gid_map < 0 || !write_all(gid_map, gmap.as_ptr(), gat) || libc::close(gid_map) != 0 {
+                skip_out(pipe_write, b"gid_map refused");
+            }
+            let second = libc::fork();
+            if second < 0 {
+                skip_out(pipe_write, b"second fork refused");
+            }
+            if second == 0 {
+                j1_theft_scenario(pipe_write);
+            }
+            // XRV1-L6 supervisor deadline (the middle
+            // SURVIVES to enforce it — a bare alarm would
+            // merely suicide the middle (default
+            // disposition) and orphan a hung scenario
+            // holding the verdict pipe): poll the scenario
+            // 25s (WNOHANG + nanosleep — all raw); on
+            // expiry SIGKILL + blocking-reap it (a pidns
+            // init ignores SIGALRM-without-handler, but
+            // NOTHING ignores SIGKILL) and _exit(42) so
+            // the parent fails LOUD on the non-clean exit
+            // (hang ⟹ staging bug ⟹ loud, never a wedged
+            // suite). Irreducible residual: D-state
+            // (uninterruptible sleep ignores even SIGKILL
+            // — no supervisor of any shape can cover it;
+            // nothing here sleeps uninterruptibly: proc
+            // mounts, forks, and a parent-drained pipe).
+            let mut now: libc::timespec = std::mem::zeroed();
+            libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
+            let deadline = now.tv_sec + 25;
+            loop {
+                let mut status = 0;
+                let got = libc::waitpid(second, &mut status, libc::WNOHANG);
+                if got == second {
+                    break;
+                }
+                if got < 0 {
+                    // ECHILD is impossible (we never
+                    // reaped — the only waiter) — logic
+                    // violation, loud.
+                    libc::_exit(43);
+                }
+                libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
+                if now.tv_sec >= deadline {
+                    libc::kill(second, libc::SIGKILL);
+                    let mut status = 0;
+                    libc::waitpid(second, &mut status, 0);
+                    libc::_exit(42);
+                }
+                let nap = libc::timespec {
+                    tv_sec: 0,
+                    tv_nsec: 10_000_000,
+                };
+                libc::nanosleep(&nap, std::ptr::null_mut());
+            }
+            libc::_exit(0);
+        }
+    }
+
+    /// XRV1-J1 staging, inner fork: single-threaded (child
+    /// of a single-threaded child) — full Rust is sound
+    /// here. Mounts a fresh /proc (private mountns), then
+    /// stages two recycle+same-tick pairs: the MAIN leg
+    /// drops a KillReapGuard over the sweep-reaped birth
+    /// (verdict MAIN ok/stolen), the BAD leg reaps the
+    /// recycled zombie with a bare numeric waitpid (the
+    /// pre-fix shape — verdict BAD stole/nosteal). Never
+    /// returns (writes the verdict + _exits).
+    #[cfg(target_arch = "x86_64")]
+    fn j1_theft_scenario(pipe_write: libc::c_int) -> ! {
+        // SAFETY: mount over /proc inside our private
+        // mountns only; the write end is ours.
+        unsafe {
+            use std::io::Write as _;
+            use std::os::unix::io::FromRawFd as _;
+            // Hang backstop, PRIMARY (XRV1-K8: set HERE —
+            // the middle's context does not survive the
+            // fork; XRV1-L6: WITH an installed handler —
+            // this child is a pidns init, which IGNORES
+            // default-disposition SIGALRM — and the
+            // handler _exits (returning would resume into
+            // EINTR-retried reads)). A hung scenario
+            // suicides at 20s; the middle reaps it and
+            // the parent fails loud on the short verdict
+            // (hang ⟹ staging bug ⟹ loud, never a wedged
+            // suite). The middle's 25s poll is the
+            // backstop.
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = j6_alarm_suicide as usize;
+            libc::sigemptyset(&mut action.sa_mask);
+            action.sa_flags = 0;
+            if libc::sigaction(libc::SIGALRM, &action, std::ptr::null_mut()) != 0 {
+                libc::_exit(61);
+            }
+            // XRV1-L20: unblock SIGALRM explicitly (an
+            // inherited blocked mask would wedge the
+            // suicide — same class as the plumbing
+            // test; malloc-free).
+            let mut unblock: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&mut unblock);
+            libc::sigaddset(&mut unblock, libc::SIGALRM);
+            if libc::pthread_sigmask(libc::SIG_UNBLOCK, &unblock, std::ptr::null_mut()) != 0
+            {
+                libc::_exit(63);
+            }
+            libc::alarm(20);
+            let mut pipe = std::fs::File::from_raw_fd(pipe_write);
+            macro_rules! skip {
+                ($reason:expr) => {{
+                    let _ = writeln!(pipe, "SKIP {}", $reason);
+                    libc::_exit(0);
+                }};
+            }
+            // XRV1-L9: the MAIN verdict IS a pin-drop —
+            // without both capabilities the guard is
+            // Unpinned and MAIN would pass vacuously (a
+            // silent drop steals nothing). Skip loud.
+            if !waitid_pidfd_supported() {
+                skip!("waitid(P_PIDFD) unavailable");
+            }
+            // Fresh /proc for the new pidns (tick reads +
+            // ns_last_pid need OUR namespace's view).
+            if libc::mount(
+                c"proc".as_ptr(),
+                c"/proc".as_ptr(),
+                c"proc".as_ptr(),
+                0,
+                std::ptr::null(),
+            ) != 0
+            {
+                skip!("proc mount refused");
+            }
+            // One recycle+same-tick pair: fork A (pure
+            // fork, _exit — no exec, keeps the pair inside
+            // one jiffy), ARM THE GUARD WHILE A LIVES
+            // (before any wait — the true J1 shape),
+            // sweep-reap A via waitpid(-1) (the in-tree
+            // sweep shape), pin the allocator with
+            // ns_last_pid, fork B (recycled number),
+            // verify number + tick. Retries across jiffy
+            // edges; None past the bound (unalignable).
+            // Misaligned attempts disarm explicitly (the
+            // drop would be a silent no-op on a tick
+            // mismatch anyway — hygiene, not soundness).
+            fn stage_pair() -> Option<(KillReapGuard, libc::pid_t, libc::pid_t)> {
+                for _ in 0..60 {
+                    // Jiffy-edge sync: /proc/uptime ticks in
+                    // centiseconds off the same clock as
+                    // starttime — starting just after a flip
+                    // maximizes the in-jiffy window.
+                    let first = std::fs::read_to_string("/proc/uptime").ok()?;
+                    let field = first.split_whitespace().next()?.to_string();
+                    let edge = std::time::Instant::now() + std::time::Duration::from_millis(50);
+                    loop {
+                        let now = std::fs::read_to_string("/proc/uptime").ok()?;
+                        let now_field = now.split_whitespace().next()?;
+                        if now_field != field || std::time::Instant::now() >= edge {
+                            break;
+                        }
+                    }
+                    // SAFETY: fork in a single-threaded
+                    // child; the fork-child self-stops
+                    // FIRST (raw kill — no allocator, no
+                    // destructors), then _exits on CONT.
+                    let apid = unsafe { libc::fork() };
+                    if apid < 0 {
+                        return None;
+                    }
+                    if apid == 0 {
+                        // XRV1-L10: CHECKED self-stop (a
+                        // denied stop dies loud (99),
+                        // never runs on).
+                        unsafe {
+                            if libc::kill(libc::getpid(), libc::SIGSTOP) != 0 {
+                                libc::_exit(99);
+                            }
+                            libc::_exit(11)
+                        };
+                    }
+                    // XRV1-L2: T-await A (self-stopped ⟹
+                    // cannot exit ⟹ unreaped ⟹ the sample
+                    // names A — the fork-isolation argument
+                    // below is now the second layer, not
+                    // the only one). Self-stop has no
+                    // signal-delivery latency (synchronous
+                    // self-infliction) — the T-await costs
+                    // ~one stat read, inside the jiffy
+                    // budget the 60 retries already absorb.
+                    let stop_end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    loop {
+                        if proc_state(apid) == Some('T') {
+                            break;
+                        }
+                        if std::time::Instant::now() >= stop_end {
+                            // Attempt abandon: retire A
+                            // (never strand it stopped —
+                            // SIGKILL lands on stopped; the
+                            // blocking wait is prompt).
+                            // SAFETY: our own fork-child.
+                            unsafe {
+                                libc::kill(apid, libc::SIGKILL);
+                                let mut st = 0;
+                                libc::waitpid(apid, &mut st, 0);
+                            }
+                            return None;
+                        }
+                        std::thread::sleep(std::time::Duration::from_micros(100));
+                    }
+                    // A is unreaped (no waiter ran yet, and
+                    // none EXISTS in this pidns — no sweep
+                    // can interleave even across a
+                    // deschedule) — and now provably
+                    // stopped, so the guard pins A's birth
+                    // under the L2 hold rule. XRV1-L11:
+                    // transient-Unpinned (EMFILE/outage)
+                    // abandons the attempt (the 60-attempt
+                    // loop IS the retry — a fresh A, a
+                    // fresh construct); post-hold
+                    // Discharged is impossible ⟹ loud.
+                    let mut guard = KillReapGuard::new(apid);
+                    if !matches!(&guard.pin, GuardPin::Pinned { .. }) {
+                        if matches!(&guard.pin, GuardPin::Discharged) {
+                            panic!("staging broken (post-hold Discharged — model break?)");
+                        }
+                        guard.disarm();
+                        // SAFETY: our own fork-child (see
+                        // the T-await abandon above).
+                        unsafe {
+                            libc::kill(apid, libc::SIGKILL);
+                            let mut st = 0;
+                            libc::waitpid(apid, &mut st, 0);
+                        }
+                        return None;
+                    }
+                    // SAFETY: SIGCONT to our own stopped
+                    // fork-child (ESRCH impossible —
+                    // unreaped — so a refusal fails this
+                    // attempt (None), never silent).
+                    if unsafe { libc::kill(apid, libc::SIGCONT) } != 0 {
+                        guard.disarm();
+                        // SAFETY: our own fork-child (see
+                        // the T-await abandon above).
+                        unsafe {
+                            libc::kill(apid, libc::SIGKILL);
+                            let mut st = 0;
+                            libc::waitpid(apid, &mut st, 0);
+                        }
+                        return None;
+                    }
+                    let atick = proc_starttime(apid).ok()??;
+                    // Sweep-reap A (the in-tree waitpid(-1)
+                    // shape): consume its status, free the
+                    // number.
+                    let reap_end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    loop {
+                        let mut status = 0;
+                        // SAFETY: reap-any of our own dead
+                        // child; bounded.
+                        let got = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+                        if got == apid {
+                            break;
+                        }
+                        if std::time::Instant::now() >= reap_end {
+                            return None;
+                        }
+                        std::thread::sleep(std::time::Duration::from_micros(100));
+                    }
+                    // Pin the allocator: the next fork
+                    // reuses A's number.
+                    if std::fs::write("/proc/sys/kernel/ns_last_pid", format!("{}\n", apid - 1))
+                        .is_err()
+                    {
+                        return None;
+                    }
+                    let bpid = unsafe { libc::fork() };
+                    if bpid < 0 {
+                        return None;
+                    }
+                    if bpid == 0 {
+                        unsafe { libc::_exit(22) };
+                    }
+                    // B must be a zombie before the tick
+                    // read means anything (a live B could
+                    // still... no — the tick is fixed at
+                    // birth; but a live B spins below, so
+                    // settle it).
+                    let zend = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    while proc_state(bpid) != Some('Z') {
+                        if std::time::Instant::now() >= zend {
+                            return None;
+                        }
+                        std::thread::sleep(std::time::Duration::from_micros(100));
+                    }
+                    let btick = proc_starttime(bpid).ok()??;
+                    if bpid == apid && btick == atick {
+                        return Some((guard, apid, bpid));
+                    }
+                    // Misaligned (jiffy edge crossed or
+                    // allocator surprise): stand the guard
+                    // down, reap B, retry.
+                    guard.disarm();
+                    let mut status = 0;
+                    // SAFETY: our own staged zombie.
+                    unsafe {
+                        libc::waitpid(bpid, &mut status, 0);
+                    }
+                }
+                None
+            }
+            // MAIN leg: guard armed over A, A sweep-reaped,
+            // B recycled same-tick — the drop must spare
+            // B's status (pre-fix: tick matches, waitpid
+            // steals → ECHILD below).
+            let Some((guard, apid, bpid)) = stage_pair() else {
+                skip!("pair unalignable (clock too coarse?)");
+            };
+            drop(guard);
+            let mut status = 0;
+            // SAFETY: our own staged zombie (unless the
+            // drop stole it — the asserted defect).
+            let got = libc::waitpid(bpid, &mut status, libc::WNOHANG);
+            if got == bpid && libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 22 {
+                let _ = writeln!(pipe, "MAIN ok");
+            } else {
+                let _ = writeln!(
+                    pipe,
+                    "MAIN stolen (waitpid({bpid}) got={got} errno={})",
+                    std::io::Error::last_os_error().raw_os_error().unwrap_or(-1)
+                );
+            }
+            let _ = apid;
+            // BAD leg: identical staging, but a bare
+            // numeric waitpid (the pre-fix shape) instead
+            // of the guard — it MUST steal B2's status
+            // (proves the staging aligns recycle+tick; a
+            // non-stealing bad control fails the test
+            // loud, never a vacuous green).
+            let Some((mut guard2, a2, b2)) = stage_pair() else {
+                skip!("bad-leg pair unalignable");
+            };
+            guard2.disarm();
+            let mut status2 = 0;
+            // SAFETY: our own staged zombie — deliberately
+            // the racy numeric shape.
+            let got2 = libc::waitpid(a2, &mut status2, libc::WNOHANG);
+            if got2 == b2 && libc::WIFEXITED(status2) && libc::WEXITSTATUS(status2) == 22 {
+                let _ = writeln!(pipe, "BAD stole");
+            } else {
+                let _ = writeln!(
+                    pipe,
+                    "BAD nosteal (waitpid({a2}) got={got2} errno={})",
+                    std::io::Error::last_os_error().raw_os_error().unwrap_or(-1)
+                );
+            }
+            libc::_exit(0);
+        }
+    }
+
+    /// XRV1-J2 collateral (contract pin, not a
+    /// bug-catcher — theft discrimination needs forced
+    /// recycle, proven by
+    /// `kill_reap_guard_drop_spares_sweep_recycled_status`):
+    /// skip-discharge over a sweep-reaped birth reports
+    /// TRUE with no numeric effects. The return is
+    /// asserted directly (a regression to false — or to
+    /// a numeric wait — misreports discharge and risks
+    /// stealing); the sibling zombie's status must
+    /// survive intact. The sweep-reap is pid-specific
+    /// (XRV1-K5 — waitpid(-1) here would eat parallel
+    /// tests' statuses).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn skip_discharge_after_sweep_reap_confirms_without_stealing() {
+        // XRV1-L9: the verdict runs through a pin — no
+        // pin without both capabilities.
+        if !waitid_pidfd_supported() {
+            eprintln!("skip: waitid(P_PIDFD) unavailable (no pin to discharge through)");
+            return;
+        }
+        // Stopped (XRV1-K3: instant-exit bodies must pin
+        // while provably unreaped).
+        let (mut swept, mut _kguard) = spawn_stopped_sh_with_guard("exit 7");
+        let spid = swept.id() as libc::pid_t;
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while proc_state(spid) != Some('Z') {
+            assert!(
+                std::time::Instant::now() < end,
+                "exiter must zombify (still {0:?})",
+                proc_state(spid)
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // Sweep-reap, PID-SPECIFIC (XRV1-K5: the
+        // in-tree waitpid(-1) shape would consume
+        // parallel tests' statuses — oldest-first — in
+        // this in-process test; the pid-specific reap
+        // reaches the identical post-state for OUR birth).
+        loop {
+            let mut status = 0;
+            // SAFETY: WNOHANG reap of our own dead child;
+            // bounded.
+            let got = unsafe { libc::waitpid(spid, &mut status, libc::WNOHANG) };
+            assert!(
+                std::time::Instant::now() < end,
+                "sweep must reap the exiter"
+            );
+            if got == spid {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        // XRV1-K9: cleanup custody from spawn (the
+        // settle/discharge asserts below can panic) —
+        // stopped (XRV1-K3: instant-exit bodies).
+        let (mut sibling, mut _sibguard) = spawn_stopped_sh_with_guard("exit 9");
+        let sibpid = sibling.id() as libc::pid_t;
+        while proc_state(sibpid) != Some('Z') {
+            assert!(
+                std::time::Instant::now() < end,
+                "sibling must zombify (still {0:?})",
+                proc_state(sibpid)
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            _kguard.skip_discharge(&mut swept),
+            "a sweep-reaped birth is discharged (proven gone — no numeric effects sound)"
+        );
+        _kguard.disarm();
+        let status = sibling.wait().expect("sibling status survives");
+        _sibguard.disarm();
+        assert_eq!(status.code(), Some(9), "sibling status intact");
+    }
+
+    /// XRV1-K3 collateral: the construction state table,
+    /// arm by arm — None-sampled ⟹ Unpinned; ESRCH-open
+    /// ⟹ Discharged (never numeric effects after proven
+    /// disappearance); other-open-errno ⟹ Unpinned
+    /// (XRV1-L1: the numeric fallback is DELETED — no
+    /// authority without a pin); opened, verify-match,
+    /// and waitid ⟹ Pinned; opened with
+    /// verify-mismatch/gone ⟹ Unpinned; opened with
+    /// verify-match but WITHOUT waitid ⟹ Unpinned
+    /// (XRV1-L9: an unwaitable pin cannot reap, so it
+    /// claims nothing). Mutant-checked (swapping any two
+    /// arms REDs).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn guard_pin_classification_maps_construction_states() {
+        use GuardPinKind as Kind;
+        assert_eq!(classify_guard_pin(None, None, None, true), Kind::Unpinned);
+        assert_eq!(
+            classify_guard_pin(None, Some(libc::ESRCH), Some(7), true),
+            Kind::Unpinned
+        );
+        assert_eq!(
+            classify_guard_pin(Some(7), Some(libc::ESRCH), Some(7), true),
+            Kind::Discharged
+        );
+        assert_eq!(
+            classify_guard_pin(Some(7), Some(libc::ESRCH), None, true),
+            Kind::Discharged
+        );
+        // Proven-gone needs no waitid (capability
+        // failure cannot un-prove disappearance).
+        assert_eq!(
+            classify_guard_pin(Some(7), Some(libc::ESRCH), Some(7), false),
+            Kind::Discharged
+        );
+        assert_eq!(
+            classify_guard_pin(Some(7), Some(libc::ENOSYS), Some(7), true),
+            Kind::Unpinned
+        );
+        assert_eq!(
+            classify_guard_pin(Some(7), Some(libc::EMFILE), None, true),
+            Kind::Unpinned
+        );
+        assert_eq!(
+            classify_guard_pin(Some(7), None, Some(7), true),
+            Kind::Pinned
+        );
+        assert_eq!(
+            classify_guard_pin(Some(7), None, Some(7), false),
+            Kind::Unpinned
+        );
+        assert_eq!(
+            classify_guard_pin(Some(7), None, Some(9), true),
+            Kind::Unpinned
+        );
+        assert_eq!(
+            classify_guard_pin(Some(7), None, None, true),
+            Kind::Unpinned
+        );
+    }
+
+    /// XRV1-L13 collateral: the capability probe
+    /// qualifies BOTH flag sets it guards (cleanup
+    /// consumes — WEXITED|WNOHANG without WNOWAIT;
+    /// peeking passes WNOWAIT). Each leg runs
+    /// fork-contained under a flag-selective seccomp
+    /// filter (installed post-fork in the child only):
+    /// deny-consuming ⟹ probe must report false (its
+    /// cleanup would EPERM); deny-peeking ⟹ likewise.
+    /// RED with a WNOWAIT-only probe (the consuming leg
+    /// reports true under the consuming-deny filter).
+    /// The probe path is raw syscalls only (no alloc),
+    /// so calling it post-fork is async-signal-safe;
+    /// seccomp-unavailable skips loud via exit 77.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn waitid_pidfd_probe_qualifies_both_flag_sets() {
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct SockFilter {
+            code: u16,
+            jt: u8,
+            jf: u8,
+            k: u32,
+        }
+        #[repr(C)]
+        struct SockFprog {
+            len: u16,
+            filter: *const SockFilter,
+        }
+        // deny_when_set=false: EPERM waitid(247) whose
+        // options lack WNOWAIT (deny consuming, allow
+        // peeking); true: the reverse. JSET shape (6
+        // insns): the DENY/ALLOW slots swap per leg.
+        const WNOWAIT_FLAG: u32 = 0x01000000;
+        const DENY: SockFilter =
+            SockFilter { code: 0x06, jt: 0, jf: 0, k: 0x00050000 | 1 };
+        const ALLOW: SockFilter =
+            SockFilter { code: 0x06, jt: 0, jf: 0, k: 0x7fff0000 };
+        fn deny_filter(deny_when_set: bool) -> [SockFilter; 6] {
+            let (tail, allow_skip): ([SockFilter; 2], u8) = if deny_when_set {
+                ([ALLOW, DENY], 2)
+            } else {
+                ([DENY, ALLOW], 3)
+            };
+            [
+                SockFilter { code: 0x20, jt: 0, jf: 0, k: 0 },
+                SockFilter { code: 0x15, jt: 0, jf: allow_skip, k: 247 },
+                SockFilter { code: 0x20, jt: 0, jf: 0, k: 40 },
+                SockFilter { code: 0x45, jt: 1, jf: 0, k: WNOWAIT_FLAG },
+                tail[0],
+                tail[1],
+            ]
+        }
+        // SAFETY: fork in a test thread; each child runs
+        // raw syscalls + the alloc-free probe only.
+        for (leg, deny_when_set) in [(0, false), (1, true)] {
+            let kid = unsafe { libc::fork() };
+            assert!(kid >= 0, "staging broken (probe fork leg {leg})");
+            if kid == 0 {
+                unsafe {
+                    let filter = deny_filter(deny_when_set);
+                    if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+                        || libc::prctl(
+                            libc::PR_SET_SECCOMP,
+                            libc::SECCOMP_MODE_FILTER,
+                            &SockFprog { len: 6, filter: filter.as_ptr() },
+                            0,
+                        ) != 0
+                    {
+                        libc::_exit(77);
+                    }
+                    // The probe under confinement: either
+                    // denial must read unsupported.
+                    if waitid_pidfd_supported() {
+                        libc::_exit(1);
+                    }
+                    libc::_exit(0);
+                }
+            }
+            let mut status = 0;
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                // SAFETY: our own fork-child, WNOHANG poll.
+                let got = unsafe { libc::waitpid(kid, &mut status, libc::WNOHANG) };
+                if got == kid {
+                    break;
+                }
+                assert!(got >= 0, "staging broken (probe wait leg {leg})");
+                if std::time::Instant::now() >= end {
+                    // SAFETY: our own fork-child.
+                    unsafe {
+                        libc::kill(kid, libc::SIGKILL);
+                        libc::waitpid(kid, &mut status, 0);
+                    }
+                    panic!("staging broken (probe child wedged leg {leg})");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert!(
+                unsafe { libc::WIFEXITED(status) },
+                "probe child must exit leg {leg} (got {status})"
+            );
+            // SAFETY: WIFEXITED proven above.
+            match unsafe { libc::WEXITSTATUS(status) } {
+                0 => {}
+                77 => {
+                    eprintln!("skip: seccomp install refused leg {leg}");
+                    return;
+                }
+                _ => panic!(
+                    "probe must qualify both flag sets (leg {leg} reported supported under denial)"
+                ),
+            }
+        }
+    }
+
+    /// XRV1-L11 collateral: the hold-read retry
+    /// decision, pure — T proceeds; any other OBSERVED
+    /// state panics immediately (wrong-state is never
+    /// transient); an UNREADABLE stat retries while the
+    /// bound holds (transient outage) and panics past it
+    /// (persistent outage ⟹ host-broken). Mutant-checked
+    /// (collapsing Retry/Panic REDs).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn hold_read_retry_decision_maps_outage_outcomes() {
+        assert_eq!(hold_read_retry(Some('T'), false), HoldRead::Proceed);
+        assert_eq!(hold_read_retry(Some('T'), true), HoldRead::Proceed);
+        assert_eq!(hold_read_retry(Some('R'), false), HoldRead::PanicWrongState);
+        assert_eq!(hold_read_retry(Some('Z'), false), HoldRead::PanicWrongState);
+        assert_eq!(hold_read_retry(Some('S'), true), HoldRead::PanicWrongState);
+        assert_eq!(hold_read_retry(None, false), HoldRead::Retry);
+        assert_eq!(hold_read_retry(None, true), HoldRead::PanicOutage);
+    }
+
+    /// XRV1-L11 collateral: the construct-retry decision,
+    /// pure — Pinned returns; Unpinned retries ONLY on a
+    /// capable host (transient EMFILE/outage — absorbed
+    /// by retry, never CONTed unpinned); Unpinned on an
+    /// incapable host returns degraded (old-kernel
+    /// hygiene-only path — the L9 gates keep verdicts
+    /// off it); Discharged never retries (post-hold it
+    /// is impossible ⟹ firing is loud). Mutant-checked.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn construct_retry_decision_maps_pin_outcomes() {
+        assert!(!should_retry_construct(&GuardPin::Unpinned, false));
+        assert!(should_retry_construct(&GuardPin::Unpinned, true));
+        assert!(!should_retry_construct(&GuardPin::Discharged, true));
+        assert!(!should_retry_construct(&GuardPin::Discharged, false));
+    }
+
+    /// XRV1-L15 collateral: the probe's errno→support
+    /// decision table, pure and deterministic — open
+    /// must succeed; EACH flag set must succeed or prove
+    /// dispatch (ECHILD). Every denial (ENOSYS/EINVAL
+    /// for missing P_PIDFD, EPERM for flag-selective
+    /// confinement, EMFILE for exhaustion, anything
+    /// else) reads unsupported. EINTR never classifies
+    /// (the probe retries it). Mutant-checked (dropping
+    /// any arm REDs).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn waitid_probe_classification_maps_errno_decisions() {
+        // All-success ⟹ supported.
+        assert!(waitid_probe_classify(None, None, None));
+        // ECHILD proves dispatch (self merely
+        // not-waitable) — on either or both sets.
+        assert!(waitid_probe_classify(None, Some(libc::ECHILD), None));
+        assert!(waitid_probe_classify(None, None, Some(libc::ECHILD)));
+        assert!(waitid_probe_classify(
+            None,
+            Some(libc::ECHILD),
+            Some(libc::ECHILD)
+        ));
+        // Any open errno ⟹ unsupported (ENOSYS pre-5.3,
+        // EPERM confined, EMFILE exhausted).
+        assert!(!waitid_probe_classify(Some(libc::ENOSYS), None, None));
+        assert!(!waitid_probe_classify(Some(libc::EPERM), None, None));
+        assert!(!waitid_probe_classify(Some(libc::EMFILE), None, None));
+        // Any wait errno but ECHILD, on either set ⟹
+        // unsupported (ENOSYS/EINVAL no-P_PIDFD, EPERM
+        // flag-selective denial).
+        assert!(!waitid_probe_classify(None, Some(libc::ENOSYS), None));
+        assert!(!waitid_probe_classify(None, None, Some(libc::EINVAL)));
+        assert!(!waitid_probe_classify(None, Some(libc::EPERM), None));
+        assert!(!waitid_probe_classify(None, None, Some(libc::EPERM)));
+        assert!(!waitid_probe_classify(None, Some(libc::EFAULT), Some(libc::ECHILD)));
+    }
+
+    /// XRV1-L15 collateral: the probe agrees with an
+    /// independent live canary (raw pidfd_open + raw
+    /// consuming-waitid + raw peeking-waitid, gathered
+    /// inline here — NOT by calling the probe — then
+    /// decided by the shared pure classifier). Under
+    /// denial or exhaustion BOTH read false (agreement —
+    /// no suite failure; the L9 gates skip loud instead
+    /// — XRV1-L15). The old uname-assert is deleted (it
+    /// reddened under legitimate denial); uname survives
+    /// as a one-direction check (canary-true on a <5.4
+    /// kernel is impossible ⟹ loud) plus diagnostic.
+    /// Transient disagreement (an EMFILE burst edge
+    /// between the two gatherings) retries bounded;
+    /// persistent disagreement is a real probe bug ⟹
+    /// loud. The old-kernel live direction is untestable
+    /// here — the pure table test covers it (ENOSYS
+    /// arms) by construction.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn waitid_pidfd_probe_agrees_with_live_canary() {
+        use std::os::unix::io::FromRawFd as _;
+        fn canary_once() -> bool {
+            let pid = std::process::id() as libc::pid_t;
+            let open_errno = match super::super::seccomp::pidfd_open_raw(pid) {
+                Ok(fd) => {
+                    let owned = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(fd) };
+                    use std::os::unix::io::AsRawFd as _;
+                    let raw = owned.as_raw_fd();
+                    let consume =
+                        waitid_pidfd_flag_errno(raw, libc::WEXITED | libc::WNOHANG);
+                    let peek = waitid_pidfd_flag_errno(
+                        raw,
+                        libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                    );
+                    return waitid_probe_classify(None, consume, peek);
+                }
+                Err(errno) => Some(errno),
+            };
+            waitid_probe_classify(open_errno, None, None)
+        }
+        // Agreement with transient absorption (a burst
+        // edge between gatherings must not RED).
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let (probe, canary) = loop {
+            let probe = waitid_pidfd_supported();
+            let canary = canary_once();
+            if probe == canary {
+                break (probe, canary);
+            }
+            assert!(
+                std::time::Instant::now() < end,
+                "probe/canary disagree persistently (probe={probe} canary={canary})"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        let mut uts: libc::utsname = unsafe { std::mem::zeroed() };
+        // SAFETY: zeroed utsname out-param.
+        assert_eq!(unsafe { libc::uname(&mut uts) }, 0, "uname works");
+        // SAFETY: uname NUL-terminates on success.
+        let release = unsafe { std::ffi::CStr::from_ptr(uts.release.as_ptr()) }.to_string_lossy();
+        eprintln!("probe/canary agree: {probe} (uname -r {release})");
+        if canary {
+            let mut parts = release.split('.');
+            let major: u64 = parts.next().unwrap_or("").parse().expect("major parses");
+            let minor_raw = parts.next().unwrap_or("");
+            let minor_digits: String =
+                minor_raw.chars().take_while(|c| c.is_ascii_digit()).collect();
+            let minor: u64 = minor_digits.parse().expect("minor parses");
+            assert!(
+                (major, minor) >= (5, 4),
+                "canary-true on a pre-5.4 kernel ({release}) is impossible"
+            );
+        }
+    }
+
+    /// XRV1-L2 collateral: the stopped-sleep shape (every
+    /// L2 sleeper conversion relies on it) — `exec sleep
+    /// N` under self-stop yields a birth whose argv is
+    /// exactly [sleep, N] and whose tick survives the
+    /// stop→CONT→exec path (the tick read while held
+    /// equals the tick read while running — the pin
+    /// taken during the stop names the sleep birth).
+    /// Also pins the `_held` handshake (T while held,
+    /// running after CONT). No capability gate (shape
+    /// only — asserts never touch the pin).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn stopped_sleep_spawn_reports_running_sleep() {
+        let (mut child, mut _guard) = spawn_stopped_sh_with_guard_held("exec sleep 30");
+        let pid = child.id() as libc::pid_t;
+        assert_eq!(proc_state(pid), Some('T'), "held ⟹ stopped");
+        let held_tick: u64 = proc_starttime(pid)
+            .expect("held stat readable")
+            .expect("held birth visible");
+        cont_held_birth(pid);
+        // Settle EXEC'D (argv is the exec-proof — a
+        // running state alone still shows pre-exec sh:
+        // settle on the cmdline flipping to the sleep).
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let argv: Vec<String> = loop {
+            let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).expect("cmdline readable");
+            let argv: Vec<String> = cmdline
+                .split(|b| *b == 0)
+                .filter(|piece| !piece.is_empty())
+                .map(|piece| std::str::from_utf8(piece).expect("argv utf8").to_string())
+                .collect();
+            if argv == ["sleep", "30"] {
+                break argv;
+            }
+            assert!(
+                std::time::Instant::now() < end,
+                "sleep must exec after CONT (still {argv:?})"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        let run_tick: u64 = proc_starttime(pid)
+            .expect("running stat readable")
+            .expect("running birth visible");
+        assert_eq!(
+            held_tick, run_tick,
+            "tick survives stop→CONT→exec (else the held pin misnames)"
+        );
+        assert_eq!(argv, vec!["sleep", "30"], "post-exec argv is a plain sleep");
+        child.kill().expect("kill lands");
+        child.wait().expect("owner reaps");
+        _guard.disarm();
+        // The CONTaining variant releases before return
+        // (settle exec'd — same argv proof).
+        let (mut child2, mut _guard2) = spawn_stopped_sh_with_guard("exec sleep 31");
+        let pid2 = child2.id() as libc::pid_t;
+        let end2 = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let cmdline2 =
+                std::fs::read(format!("/proc/{pid2}/cmdline")).expect("cmdline2 readable");
+            if cmdline2.starts_with(b"sleep\x0031\x00") {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < end2,
+                "plain variant must run to exec"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        child2.kill().expect("kill lands");
+        child2.wait().expect("owner reaps");
+        _guard2.disarm();
+    }
+
+    /// XRV1-L10 collateral: the self-stop is CHECKED —
+    /// under kill-denying seccomp the wrapper must die
+    /// with exit 99 (loud), never run its body. The
+    /// filter is fork-contained (installed post-fork in
+    /// the child only — the suite itself never runs
+    /// confined; kill() is load-bearing everywhere, so a
+    /// kill-denying host voids the suite generally, not
+    /// just stopped-spawn). The child exercises the REAL
+    /// [`stopped_spawn_argv`] text with body `exit 42`:
+    /// RED without the check (body runs, exit 42),
+    /// GREEN with it (exit 99). Post-fork code is raw
+    /// syscalls only (async-signal-safe — no alloc, no
+    /// Command); seccomp-unavailable (exotic kernels,
+    /// nested confinement refusing the install) skips
+    /// loud via exit 77.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn stopped_spawn_checked_stop_dies_loud_on_denial() {
+        // BPF: deny kill(*, SIGSTOP) (reviewer's 6-insn
+        // shape — syscall 62, arg1 == 19 ⟹ EPERM), allow
+        // everything else.
+        #[repr(C)]
+        struct SockFilter {
+            code: u16,
+            jt: u8,
+            jf: u8,
+            k: u32,
+        }
+        #[repr(C)]
+        struct SockFprog {
+            len: u16,
+            filter: *const SockFilter,
+        }
+        const DENY_STOP: [SockFilter; 6] = [
+            SockFilter { code: 0x20, jt: 0, jf: 0, k: 0 },
+            SockFilter { code: 0x15, jt: 0, jf: 3, k: 62 },
+            SockFilter { code: 0x20, jt: 0, jf: 0, k: 24 },
+            SockFilter { code: 0x15, jt: 0, jf: 1, k: 19 },
+            SockFilter { code: 0x06, jt: 0, jf: 0, k: 0x00050000 | 1 },
+            SockFilter { code: 0x06, jt: 0, jf: 0, k: 0x7fff0000 },
+        ];
+        let text =
+            std::ffi::CString::new(stopped_spawn_argv("exit 42")).expect("argv cstring");
+        // SAFETY: fork in a test thread; the child runs
+        // raw syscalls only until _exit (no alloc, no
+        // locks — the CString above is read-only shared).
+        let kid = unsafe { libc::fork() };
+        assert!(kid >= 0, "staging broken (denial fork)");
+        if kid == 0 {
+            unsafe {
+                if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
+                    || libc::prctl(
+                        libc::PR_SET_SECCOMP,
+                        libc::SECCOMP_MODE_FILTER,
+                        &SockFprog { len: 6, filter: DENY_STOP.as_ptr() },
+                        0,
+                    ) != 0
+                {
+                    libc::_exit(77);
+                }
+                let grand = libc::fork();
+                if grand < 0 {
+                    libc::_exit(76);
+                }
+                if grand == 0 {
+                    let devnull = libc::open(
+                        c"/dev/null".as_ptr(),
+                        libc::O_RDWR | libc::O_CLOEXEC,
+                    );
+                    if devnull >= 0 {
+                        libc::dup2(devnull, 0);
+                        libc::dup2(devnull, 1);
+                        libc::dup2(devnull, 2);
+                        if devnull > 2 {
+                            libc::close(devnull);
+                        }
+                    }
+                    let sh = c"/bin/sh".as_ptr();
+                    let dash_c = c"-c".as_ptr();
+                    let argv = [sh, dash_c, text.as_ptr(), std::ptr::null()];
+                    let envp = [std::ptr::null()];
+                    libc::execve(sh, argv.as_ptr(), envp.as_ptr());
+                    libc::_exit(127);
+                }
+                // Bounded reap (no unbounded waits — a
+                // broken filter could let the stop land;
+                // _exit(2) distinguishes confinement bugs
+                // from body runs).
+                let mut status = 0;
+                let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                let code = loop {
+                    let got = libc::waitpid(grand, &mut status, libc::WNOHANG);
+                    if got == grand {
+                        break status;
+                    }
+                    if got < 0 {
+                        libc::_exit(75);
+                    }
+                    if std::time::Instant::now() >= end {
+                        libc::kill(grand, libc::SIGKILL);
+                        libc::waitpid(grand, &mut status, 0);
+                        libc::_exit(2);
+                    }
+                    libc::usleep(1000);
+                };
+                // WIFEXITED(99) ⟺ the check fired (loud);
+                // anything else (42 = body ran!) is RED.
+                if libc::WIFEXITED(code) && libc::WEXITSTATUS(code) == 99 {
+                    libc::_exit(0);
+                }
+                libc::_exit(1);
+            }
+        }
+        // Parent: bounded supervisor wait (L20 shape — a
+        // wedged child must fail loud, never hang).
+        let mut status = 0;
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            // SAFETY: our own fork-child, WNOHANG poll.
+            let got = unsafe { libc::waitpid(kid, &mut status, libc::WNOHANG) };
+            if got == kid {
+                break;
+            }
+            assert!(got >= 0, "staging broken (denial wait)");
+            if std::time::Instant::now() >= end {
+                // SAFETY: our own fork-child.
+                unsafe {
+                    libc::kill(kid, libc::SIGKILL);
+                    libc::waitpid(kid, &mut status, 0);
+                }
+                panic!("staging broken (denial child wedged past 10s)");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(
+            unsafe { libc::WIFEXITED(status) },
+            "denial child must exit (got {status})"
+        );
+        // SAFETY: WIFEXITED proven above.
+        match unsafe { libc::WEXITSTATUS(status) } {
+            0 => {}
+            77 => {
+                eprintln!("skip: seccomp install refused (exotic/nested host)");
+            }
+            2 => panic!("staging broken (denial confinement let the stop land?)"),
+            75 | 76 | 127 => panic!("staging broken (denial child error {status})"),
+            other => panic!(
+                "self-stop must be CHECKED (denied stop ran the body — child exit {other}, want 0 (grandchild 99))"
+            ),
+        }
+    }
+
+    /// XRV1-J6 collateral: the staging guard reaps on
+    /// unwind (kill-only custody would strand a
+    /// dying-live or zombie birth). A forced panic inside
+    /// `catch_unwind`, then the drop must leave the birth
+    /// reaped. Discharge is verified through an
+    /// independent pidfd (XRV1-K6 — a post-drop numeric
+    /// waitpid would address a freed number and could
+    /// consume a recycled sibling's zombie): ESRCH ⟺
+    /// died-and-reaped (a stranded zombie answers
+    /// signal-0). Discriminates the guard TYPE (pins that
+    /// staging custody is the reaping kind — swapping in
+    /// KillOnlyGuard leaves signal-0 succeeding and
+    /// fails). A concurrent sweep reaping ahead of the
+    /// assert also reads ESRCH (same shape as the old
+    /// ECHILD assert — the kill is still the guard's).
+    /// XRV1-L2: the birth stays HELD throughout (no CONT
+    /// — the oracle, the guard under test, and the
+    /// unwinding drop all operate on the stopped birth;
+    /// SIGKILL lands on stopped, and the stop binds
+    /// every pin).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn staging_guard_reaps_on_unwind() {
+        use std::os::unix::io::AsRawFd as _;
+        // XRV1-L9: the verdict IS a pin-reap — no pin
+        // without both capabilities.
+        if !waitid_pidfd_supported() {
+            eprintln!("skip: waitid(P_PIDFD) unavailable (pin-reap untestable)");
+            return;
+        }
+        // XRV1-L7: INDEPENDENT cleanup custody from spawn
+        // (the guard under test may be kill-only on a
+        // regression — its zombie must still retire on
+        // every unwind path below; the oracle is captured
+        // before this guard drops, so it never masks the
+        // verdict). Disarmed only after the verdict
+        // asserts pass. XRV1-L2 HELD (the birth never
+        // runs — every pin below binds through the stop).
+        let (mut child, mut _cleanup) = spawn_stopped_sh_with_guard_held("exec sleep 30");
+        let pid = child.id() as libc::pid_t;
+        // Independent oracle, pinned while HELD (try_wait
+        // None ⟹ live; the STOP binds the open —
+        // XRV1-L2: try_wait alone does not bind it).
+        assert!(
+            child.try_wait().expect("try_wait").is_none(),
+            "birth must be live at pin time"
+        );
+        let pin = match pidfd_open_held(pid) {
+            Ok(pin) => pin,
+            Err(errno) => {
+                // XRV1-L17: disarm ONLY after confirmed
+                // retirement (kill/wait below used to
+                // panic with cleanup already disabled —
+                // a failed kill would strand the held
+                // birth stopped). skip_discharge retires
+                // through the guard's pidfd; unresolved
+                // ⟹ the guard stays armed (its drop
+                // retires).
+                if _cleanup.skip_discharge(&mut child) {
+                    _cleanup.disarm();
+                } else {
+                    eprintln!("K6 skip-path cleanup unresolved — guard stays armed");
+                }
+                eprintln!("skip: pidfd_open unavailable (errno {errno})");
+                return;
+            }
+        };
+        let result = std::panic::catch_unwind(|| {
+            // XRV1-L11: construct-retry (transient
+            // Unpinned (EMFILE/outage) must not run the
+            // verdict degraded — a silent drop would
+            // leave signal-0 succeeding (RED on
+            // transient — a flake); the birth stays
+            // stopped throughout (nobody CONTs).
+            // Persistent failure panics (caught — then
+            // the oracle below REDs on the live birth:
+            // host-broken loud, never silent).
+            let build_end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let _guard = loop {
+                let guard = KillReapGuard::new(pid);
+                if matches!(&guard.pin, GuardPin::Pinned { .. }) {
+                    break guard;
+                }
+                if matches!(&guard.pin, GuardPin::Discharged)
+                    || std::time::Instant::now() >= build_end
+                {
+                    panic!("staging broken (guard under test will not pin)");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            };
+            panic!("forced staging panic");
+        });
+        assert!(result.is_err(), "the forced panic must propagate");
+        drop(child);
+        // Birth reaped by the unwinding drop (kill-only
+        // custody would leave signal-0 succeeding).
+        // Captured BEFORE cleanup stands down (L7: the
+        // assert below must not leak on its own RED path —
+        // _cleanup retires the zombie on unwind).
+        let oracle = super::super::seccomp::pidfd_send_signal_raw(pin.as_raw_fd(), 0);
+        assert_eq!(
+            oracle,
+            Err(libc::ESRCH),
+            "staging guard must have reaped"
+        );
+        _cleanup.disarm();
+    }
+
+    /// XRV1-K4 collateral: the kill-only transfer carries
+    /// the staging guard's ESTABLISHED authority without
+    /// re-reading the number (a re-read past the reaper's
+    /// discharge would authorize a recycled stranger).
+    /// Staging pins a live birth; the birth is then
+    /// killed+reaped (the K4 shape); the transfer must
+    /// still carry the moved pidfd. XRV1-L1: the
+    /// tick-carry assert is deleted with the tick field
+    /// (no-re-read is now STRUCTURAL — there is no
+    /// numeric channel left to fill); the pidfd-move
+    /// assert below pins the transfer. Mutant-checked
+    /// (dropping the pin in transfer REDs).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn kill_only_transfer_carries_staging_authority_without_reread() {
+        // XRV1-L9: the transfer carries a pin — no pin
+        // without both capabilities.
+        if !waitid_pidfd_supported() {
+            eprintln!("skip: waitid(P_PIDFD) unavailable (no pin to transfer)");
+            return;
+        }
+        // XRV1-L2: stopped-sleep (staging pins during
+        // the stop — stopped ⟹ held ⟹ Pinned
+        // deterministically here).
+        let (mut child, staging) = spawn_stopped_sh_with_guard("exec sleep 30");
+        let pid = child.id() as libc::pid_t;
+        assert!(
+            matches!(&staging.pin, GuardPin::Pinned { .. }),
+            "staging must pin a live birth (got {:?})",
+            staging.pin
+        );
+        // Discharge the birth BEFORE transfer (the K4
+        // shape: the reaper got there first).
+        child.kill().expect("kill lands");
+        child.wait().expect("owner reaps");
+        let mut transferred = KillOnlyGuard::transfer_from(staging);
+        // XRV1-L3: stand down BEFORE judging (an assert
+        // failure below must not unwind into armed cleanup
+        // authority over a proven-retired number).
+        transferred.disarm();
+        assert_eq!(transferred.pid, pid, "transfer keeps the number");
+        assert!(transferred.pidfd.is_some(), "the pidfd moves with the pin");
+    }
+
+    /// XRV1-G2 collateral: a pin probe of a birth
+    /// reaped by a concurrent waiter reports
+    /// ReapedElsewhere (ECHILD) — never the recycled
+    /// sibling's status, never a hang.
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn victim_pin_probe_reports_concurrent_reap() {
+        // XRV1-L9: the verdict waits through a pin — no
+        // pin without both capabilities.
+        if !waitid_pidfd_supported() {
+            eprintln!("skip: waitid(P_PIDFD) unavailable (pin verdict untestable)");
+            return;
+        }
+        // XRV1-H6: cleanup custody from spawn — XRV1-L2
+        // HELD (guard + oracle pin during the stop; CONT
+        // once pinned).
+        let (mut child, mut _kguard) = spawn_stopped_sh_with_guard_held("exec sleep 30");
+        let pid = child.id() as libc::pid_t;
+        let pin = match pidfd_open_held(pid) {
+            Ok(pin) => pin,
+            Err(errno) => {
+                if _kguard.skip_discharge(&mut child) {
+                    _kguard.disarm();
+                } else {
+                    eprintln!("pin-test skip-path cleanup unresolved — guard stays armed");
+                }
+                eprintln!("skip: pidfd_open unavailable (errno {errno})");
+                return;
+            }
+        };
+        cont_held_birth(pid);
+        use std::os::unix::io::AsRawFd as _;
+        let pin_fd = pin.as_raw_fd();
+        child.kill().expect("kill lands");
+        child.wait().expect("concurrent waiter reaps");
+        // Proven discharge (reaped) — stand down before
+        // judging the probe.
+        _kguard.disarm();
+        match probe_victim_pin(pin_fd) {
+            PinProbe::ReapedElsewhere => {}
+            PinProbe::Reaped(st) => panic!("pin must not surface a reaped birth (st={st})"),
+            PinProbe::NotReady => panic!("pin must not linger NotReady past a reap"),
+            PinProbe::Unverifiable(evidence) => {
+                panic!("pin probe must stay verifiable ({evidence})")
+            }
+        }
+    }
+
+    /// XRV1-G2 collateral: a pin probe reaps the pinned
+    /// signaled birth and re-encodes waitpid shape
+    /// (callers WIFSIGNALED-decode it).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn victim_pin_probe_reaps_signaled_birth() {
+        // XRV1-L9: the verdict waits through a pin — no
+        // pin without both capabilities.
+        if !waitid_pidfd_supported() {
+            eprintln!("skip: waitid(P_PIDFD) unavailable (pin verdict untestable)");
+            return;
+        }
+        // XRV1-H6: cleanup custody from spawn (see the
+        // sibling test) — XRV1-L2 HELD.
+        let (mut child, mut _kguard) = spawn_stopped_sh_with_guard_held("exec sleep 30");
+        let pid = child.id() as libc::pid_t;
+        let pin = match pidfd_open_held(pid) {
+            Ok(pin) => pin,
+            Err(errno) => {
+                if _kguard.skip_discharge(&mut child) {
+                    _kguard.disarm();
+                } else {
+                    eprintln!("pin-test skip-path cleanup unresolved — guard stays armed");
+                }
+                eprintln!("skip: pidfd_open unavailable (errno {errno})");
+                return;
+            }
+        };
+        cont_held_birth(pid);
+        use std::os::unix::io::AsRawFd as _;
+        let pin_fd = pin.as_raw_fd();
+        child.kill().expect("kill lands");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            match probe_victim_pin(pin_fd) {
+                PinProbe::Reaped(st) => {
+                    // XRV1-I3: disarm FIRST — the status is
+                    // consumed (proven discharge), and the
+                    // asserts below can panic; judging under
+                    // an armed guard murders a same-tick
+                    // replacement on unwind.
+                    _kguard.disarm();
+                    assert!(
+                        libc::WIFSIGNALED(st),
+                        "signaled birth must decode signaled (st={st})"
+                    );
+                    assert_eq!(
+                        libc::WTERMSIG(st),
+                        libc::SIGKILL,
+                        "death signal must survive re-encoding"
+                    );
+                    break;
+                }
+                PinProbe::NotReady => {}
+                PinProbe::ReapedElsewhere => {
+                    // Discharged without us (reaped — gone)
+                    // — stand down before the loud panic.
+                    _kguard.disarm();
+                    panic!("nothing else reaps this birth")
+                }
+                PinProbe::Unverifiable(evidence) => {
+                    // Birth state UNKNOWN — keep the guard
+                    // armed (drop best-effort retires).
+                    panic!("pin probe must stay verifiable ({evidence})")
+                }
+            }
+            assert!(std::time::Instant::now() < end, "victim must die");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // Reaped via the pin above — drop the Child
+        // handle WITHOUT waiting (XRV1-H2: try_wait would
+        // numeric-waitpid the freed number and could steal
+        // a recycled sibling's status; drop neither
+        // signals nor reaps).
+        drop(child);
+    }
+
+    /// Shared victim drain for the R19-006 halves — see
+    /// [`VictimDrain`]. The caller drops its `Child`
+    /// handle before calling (drop order is inert —
+    /// drop neither signals nor reaps), disarms its
+    /// guard on `Reaped`/`Stolen` (discharged — nothing
+    /// to retire), and panics inconclusive on
+    /// `Unverifiable` with the guard still ARMED (drop
+    /// best-effort retires on unwind).
+    #[cfg(target_arch = "x86_64")]
+    fn drain_victim_status(vpid: libc::pid_t, vtick: u64) -> VictimDrain {
+        use std::os::unix::io::AsRawFd as _;
+        use std::os::unix::io::FromRawFd as _;
+        use std::time::{Duration, Instant};
+        let _ = kill_tick_gated(vpid, vtick);
+        // XRV1-G2: anchor every wait below on a pidfd pin
+        // of the EXACT victim birth.
+        let pin = match super::super::seccomp::pidfd_open_raw(vpid) {
+            Ok(fd) => unsafe { std::os::unix::io::OwnedFd::from_raw_fd(fd) },
+            Err(errno) => match proc_starttime(vpid) {
+                Ok(Some(t)) if t == vtick => {
+                    return VictimDrain::Unverifiable(format!(
+                        "present {vpid}/{vtick} but unopenable (pidfd_open errno {errno})"
+                    ));
+                }
+                Ok(v) => {
+                    return VictimDrain::Stolen(format!(
+                        "discharged before drain: {vpid}/{vtick} now {v:?}"
+                    ));
+                }
+                Err(error) => return VictimDrain::Unverifiable(format!("{error:?}")),
+            },
+        };
+        // Open-then-verify: a zombie holds its number, so
+        // a tick match proves the pin IS our victim birth
+        // (a concurrent reap+recycle between open and
+        // verify shows a foreign tick → Stolen, and the
+        // pin is never waited — the stranger's status is
+        // untouched). XRV1-H3: match explicitly — an
+        // unreadable verify is Unverifiable (cleanup
+        // custody RETAINED), never Stolen (both callers
+        // disarm on Stolen, which would abandon a
+        // possibly-live victim).
+        match proc_starttime(vpid) {
+            Ok(Some(t)) if t == vtick => {}
+            Ok(v) => {
+                return VictimDrain::Stolen(format!(
+                    "discharged during pin grab: {vpid}/{vtick} now {v:?}"
+                ));
+            }
+            Err(error) => {
+                return VictimDrain::Unverifiable(format!("pin-grab verify unreadable: {error:?}"));
+            }
+        }
+        let pin_fd = pin.as_raw_fd();
+        let end = Instant::now() + Duration::from_secs(10);
+        let mut reaped = None;
+        loop {
+            // Birth-bound: this status is OUR victim's —
+            // no same-number sibling can surface here.
+            match probe_victim_pin(pin_fd) {
+                PinProbe::Reaped(st) => {
+                    reaped = Some(st);
+                }
+                PinProbe::NotReady => {}
+                // Our exact birth was reaped by a
+                // concurrent waiter — Stolen NOW (the
+                // waitpid shape had no ECHILD arm and spun
+                // until proc showed gone).
+                PinProbe::ReapedElsewhere => {
+                    return VictimDrain::Stolen(format!(
+                        "ECHILD on pinned {vpid}/{vtick}: a concurrent waiter holds the status"
+                    ));
+                }
+                PinProbe::Unverifiable(evidence) => {
+                    return VictimDrain::Unverifiable(evidence);
+                }
+            }
+            if proc_starttime(vpid) != Ok(Some(vtick)) {
+                break;
+            }
+            assert!(Instant::now() < end, "victim must die");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        match reaped {
+            Some(st) => VictimDrain::Reaped(st),
+            None => match proc_starttime(vpid) {
+                // Transient outage blip broke the loop
+                // above with the victim present (its kill
+                // may have been suppressed by the same
+                // outage — kill_tick_gated returns false
+                // on unreadable). Retry the kill
+                // (tick-gated, idempotent) and drain a
+                // second time, BOUNDED: an unbounded
+                // blocking wait would hang on a live
+                // unkilled victim and race a concurrent
+                // reap to ECHILD.
+                Ok(Some(now)) if now == vtick => {
+                    let _ = kill_tick_gated(vpid, vtick);
+                    let end = Instant::now() + Duration::from_secs(10);
+                    loop {
+                        // Birth-bound re-await (XRV1-G2):
+                        // the pin reports ONLY our victim —
+                        // a recycled same-number sibling
+                        // can neither surface nor be reaped
+                        // (the waitpid shape it replaces
+                        // reaped whatever zombie held the
+                        // number).
+                        match probe_victim_pin(pin_fd) {
+                            PinProbe::Reaped(st) => {
+                                break VictimDrain::Reaped(st);
+                            }
+                            PinProbe::NotReady => {}
+                            PinProbe::ReapedElsewhere => {
+                                // Discharged without us (our
+                                // wait never hit, no waitable
+                                // child remains): a concurrent
+                                // waiter holds the status.
+                                break VictimDrain::Stolen(format!(
+                                    "ECHILD awaiting pinned {vpid}/{vtick}"
+                                ));
+                            }
+                            PinProbe::Unverifiable(evidence) => {
+                                break VictimDrain::Unverifiable(evidence);
+                            }
+                        }
+                        match proc_starttime(vpid) {
+                            Ok(Some(n)) if n == vtick => {}
+                            Ok(v) => {
+                                break VictimDrain::Stolen(format!(
+                                    "discharged during re-await: {vpid}/{vtick} now {v:?}"
+                                ));
+                            }
+                            Err(error) => {
+                                break VictimDrain::Unverifiable(format!("{error:?}"));
+                            }
+                        }
+                        if Instant::now() >= end {
+                            break VictimDrain::Unverifiable(format!(
+                                "present past second bound: {vpid}/{vtick}"
+                            ));
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+                Ok(v) => VictimDrain::Stolen(format!(
+                    "discharged without our wait: {vpid}/{vtick} now {v:?}"
+                )),
+                Err(error) => VictimDrain::Unverifiable(format!("{error:?}")),
+            },
+        }
+    }
+
     /// R19-006: pipe discovery must verify identity and mode
     /// against the SAME descriptor — identity comes from our
     /// opened fd while the write-mode comes from the
@@ -30746,29 +34906,42 @@ time.sleep(30)
             "swapped holder must survive discovery + retire",
         );
         // Cleanup: retire the victim ourselves and record
-        // its status HERE (a sibling waitpid(-1) sweep would
-        // otherwise steal it — the F16 hazard — and a bare
-        // stat poll spins on our own unreaped zombie, whose
-        // starttime persists until WE reap).
-        let _ = kill_tick_gated(vpid, vtick);
+        // its status HERE (a concurrent wait — sibling
+        // sweep or stale-discovery retire await — can
+        // otherwise steal it; see drain_victim_status).
         drop(victim);
-        let end = Instant::now() + Duration::from_secs(10);
-        let mut reaped = None;
-        loop {
-            let mut st = 0;
-            // SAFETY: WNOHANG assist only — our child (the
-            // number cannot recycle while we hold it).
-            if unsafe { libc::waitpid(vpid, &mut st, libc::WNOHANG) } == vpid {
-                reaped = Some(st);
+        // XRV1-F4: disarm ONLY on discharge (Reaped/Stolen)
+        // — Unverifiable keeps cleanup custody (the guard
+        // best-effort retires on the unwind below) and
+        // fails inconclusive, never skipping a
+        // possibly-live victim.
+        let st = match drain_victim_status(vpid, vtick) {
+            VictimDrain::Reaped(st) => {
+                _vguard.disarm();
+                st
             }
-            if proc_starttime(vpid) != Ok(Some(vtick)) {
-                break;
+            VictimDrain::Stolen(evidence) => {
+                _vguard.disarm();
+                let _ = std::fs::remove_file(&flag_swap);
+                let _ = std::fs::remove_file(&flag_done);
+                let _ = std::fs::remove_file(&unrelated);
+                eprintln!(
+                    "skip: R19006-F16-THEFT victim status stolen by a concurrent \
+                     waiter ({evidence}) — discovery verdicts above \
+                     already green"
+                );
+                return;
             }
-            assert!(Instant::now() < end, "victim must die");
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        _vguard.disarm();
-        let st = reaped.expect("victim status must drain to us (retained, never stolen)");
+            VictimDrain::Unverifiable(evidence) => {
+                let _ = std::fs::remove_file(&flag_swap);
+                let _ = std::fs::remove_file(&flag_done);
+                let _ = std::fs::remove_file(&unrelated);
+                panic!(
+                    "inconclusive (victim state unverifiable: {evidence}) — \
+                     refusing to certify"
+                );
+            }
+        };
         assert!(libc::WIFSIGNALED(st), "victim must die by our signal");
         let _ = std::fs::remove_file(&flag_swap);
         let _ = std::fs::remove_file(&flag_done);
@@ -30958,29 +35131,40 @@ time.sleep(30)
             "end-swapped holder must survive discovery + retire",
         );
         // Cleanup: retire the victim ourselves and record
-        // its status HERE (a sibling waitpid(-1) sweep would
-        // otherwise steal it — the F16 hazard — and a bare
-        // stat poll spins on our own unreaped zombie, whose
-        // starttime persists until WE reap).
-        let _ = kill_tick_gated(vpid, vtick);
+        // its status HERE (a concurrent wait — sibling
+        // sweep or stale-discovery retire await — can
+        // otherwise steal it; see drain_victim_status).
         drop(victim);
-        let end = Instant::now() + Duration::from_secs(10);
-        let mut reaped = None;
-        loop {
-            let mut st = 0;
-            // SAFETY: WNOHANG assist only — our child (the
-            // number cannot recycle while we hold it).
-            if unsafe { libc::waitpid(vpid, &mut st, libc::WNOHANG) } == vpid {
-                reaped = Some(st);
+        // XRV1-F4: disarm ONLY on discharge (Reaped/Stolen)
+        // — Unverifiable keeps cleanup custody (the guard
+        // best-effort retires on the unwind below) and
+        // fails inconclusive, never skipping a
+        // possibly-live victim.
+        let st = match drain_victim_status(vpid, vtick) {
+            VictimDrain::Reaped(st) => {
+                _vguard.disarm();
+                st
             }
-            if proc_starttime(vpid) != Ok(Some(vtick)) {
-                break;
+            VictimDrain::Stolen(evidence) => {
+                _vguard.disarm();
+                let _ = std::fs::remove_file(&flag_swap);
+                let _ = std::fs::remove_file(&flag_done);
+                eprintln!(
+                    "skip: R19006-F16-THEFT victim status stolen by a concurrent \
+                     waiter ({evidence}) — discovery verdicts above \
+                     already green"
+                );
+                return;
             }
-            assert!(Instant::now() < end, "victim must die");
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        _vguard.disarm();
-        let st = reaped.expect("victim status must drain to us (retained, never stolen)");
+            VictimDrain::Unverifiable(evidence) => {
+                let _ = std::fs::remove_file(&flag_swap);
+                let _ = std::fs::remove_file(&flag_done);
+                panic!(
+                    "inconclusive (victim state unverifiable: {evidence}) — \
+                     refusing to certify"
+                );
+            }
+        };
         assert!(libc::WIFSIGNALED(st), "victim must die by our signal");
         let _ = std::fs::remove_file(&flag_swap);
         let _ = std::fs::remove_file(&flag_done);
@@ -36315,10 +40499,18 @@ time.sleep(30)
             Ok(Some(rtick)),
             "RED: reform murdered by the drain's killpg (re-anchor missing)"
         );
-        assert_eq!(
-            proc_state(rpid),
-            Some('S'),
-            "RED: reform must be live-sleeping (never signaled)"
+        // R23007-FLAKE01 (2026-11-02): 'R' is live too —
+        // a just-spawned sleeper is on-CPU (R) until its
+        // first deschedule; sampling R is scheduling luck
+        // (observed 1/40 full-lib runs), not a signal.
+        // Accept R|S (the only schedulable states for an
+        // unstopped sleep); Z/gone/T stay RED
+        // (murdered/stopped — the killpg-murder mutant
+        // still leaves Z and trips this).
+        let rstate = proc_state(rpid);
+        assert!(
+            matches!(rstate, Some('R' | 'S')),
+            "RED: reform must be live (never signaled), state={rstate:?}"
         );
         kill_tick_gated(rpid, rtick);
         assert!(
@@ -37968,18 +42160,47 @@ time.sleep(30)
         assert!(mid_gone, "blind-first union must retire the middleman");
     }
 
+    /// R24001-FLAKE01 collateral (targets the shared
+    /// [`proc_entry_gone`], first unit test for it): the
+    /// absent-vs-unreadable classification is planted
+    /// deterministically (the mid-read reap transient
+    /// cannot be staged reliably — its ERROR VALUE can).
+    /// XRV1-J3 relies on the ESRCH arm below: the
+    /// unparsed-publisher pgrp refusal routes ESRCH with
+    /// NotFound (a degraded strike past a lost
+    /// reservation would murder a recycled number).
+    #[test]
+    #[cfg(target_arch = "x86_64")]
+    fn proc_entry_gone_maps_absence_not_unreadability() {
+        assert!(proc_entry_gone(&std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "gone at open"
+        )));
+        assert!(proc_entry_gone(&std::io::Error::from_raw_os_error(
+            libc::ESRCH
+        )));
+        assert!(!proc_entry_gone(&std::io::Error::from_raw_os_error(
+            libc::EPERM
+        )));
+        assert!(!proc_entry_gone(&std::io::Error::from_raw_os_error(
+            libc::EACCES
+        )));
+    }
+
     /// R11-005: starttime of the CURRENT holder of `pid`
     /// (field 22 of /proc/PID/stat). Ok(None) is proven
-    /// absence (ENOENT only); Err is unreadable-or-unparseable
-    /// (never absence — our own tasks stay stat-visible under
-    /// every hidepid level, so an unreadable stat is someone
-    /// else's problem, not a gone task). The await's stat gate
+    /// absence (ENOENT, or ESRCH from a reap between open
+    /// and read — see [`proc_entry_gone`]); Err is
+    /// unreadable-or-unparseable (never absence — our own
+    /// tasks stay stat-visible under every hidepid level,
+    /// so an unreadable stat is someone else's problem,
+    /// not a gone task). The await's stat gate
     /// and the retire's holder check share this one parser.
     #[cfg(target_arch = "x86_64")]
     fn proc_starttime(pid: libc::pid_t) -> Result<Option<u64>, String> {
         let row = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
             Ok(row) => row,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if proc_entry_gone(&error) => return Ok(None),
             Err(error) => return Err(format!("task {pid} stat unreadable: {error}")),
         };
         match (|| {

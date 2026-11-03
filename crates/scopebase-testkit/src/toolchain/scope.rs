@@ -719,6 +719,17 @@ unsafe impl BuildScopeBackend for DirectScope {
             return ScopeStart::NoEffect(invalid("cargo/rust/linker not admitted to direct scope"));
         }
         // Hash-pinned-before-use: every bound byte string must still match.
+        //
+        // S224 trust assumption (tool-dir-immutable): the hash and the
+        // `Command::new(&tool.executable)` spawn below are bound only
+        // by pathname — a writer with tool-directory access could swap
+        // the binary in between. `std::fs::read` already hashes
+        // through a single open description, so no re-read narrows
+        // this; only fd-bound exec would close it, which is out of
+        // proportion here. Callers must hold the tool directory
+        // immutable across the start — executable contents as well as
+        // pathname bindings. The hash voids steady-state corruption
+        // and misbinding, not a live swapper.
         let mut bound: Vec<(&str, &ToolBinary)> = vec![("tool", tool)];
         bound.push(("loaded_llvm", tools.loaded_llvm()));
         for (what, binary) in bound {

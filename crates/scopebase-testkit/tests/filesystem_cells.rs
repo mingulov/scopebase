@@ -3710,3 +3710,41 @@ fn thread_plant_spawn_denial_is_setup_error() {
     );
     pass("FS10", "RLIMIT_NPROC denial exits 2 with worker=15");
 }
+
+/// S221: a driver flag present ONLY after `--` must not configure the
+/// driver. The subject argv is untrusted: `--timeout` after the dash
+/// is the subject's argument, not the driver's, so the run refuses
+/// usage (exit 2) instead of silently adopting `10`.
+/// Pre-fix the driver scanned the whole argv and audited with 10.
+#[cfg(all(target_os = "linux", feature = "linux-fixtures"))]
+#[test]
+fn s221_audit_denial_ignores_post_dash_timeout() {
+    let dir = std::env::temp_dir().join(format!(
+        "fs10-s221-dash-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let target_file = dir.join("denial-target.bin");
+    std::fs::write(&target_file, pattern_bytes(97, 8192)).unwrap();
+    let output = std::process::Command::new(audit_denial_bin())
+        .arg("getregs")
+        .arg("--target")
+        .arg(&target_file)
+        .arg("--")
+        .arg(audit_subject_bin())
+        .arg("--timeout")
+        .arg("10")
+        .output()
+        .expect("denial driver runs");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "post-dash --timeout must not configure the driver: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

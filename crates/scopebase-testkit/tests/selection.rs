@@ -940,3 +940,66 @@ fn unresolved_selection_never_reports_full_or_attests() {
         .attest_complete()
         .expect_err("unresolved selection must not attest complete");
 }
+
+/// Two profiles sharing one case and one cell: the duplicate must not
+/// consume cap twice.
+fn shared_cell_catalog() -> CaseCatalog {
+    let doc = json!({
+        "schema_version": 1u32,
+        "catalog_revision": 1u32,
+        "tasks": ["TT08"],
+        "obligations": [{"kind": "regression_family", "id": "H08",
+            "description": "shared cell", "owners": ["TT08"]}],
+        "families": [{"id": "H08", "short_contract": "shared cell",
+            "obligations": [{"kind": "regression_family", "id": "H08"}]}],
+        "cells": [
+            {"id": "cell-s", "tier": "T0", "description": "s", "binding": "LOGICAL_ONLY"},
+        ],
+        "cases": [
+            {"id": "H08.shared", "family": "H08", "version": 1u32,
+             "implementation_status": "UNIMPLEMENTED", "owners": ["TT08"],
+             "obligations": [{"kind": "regression_family", "id": "H08"}],
+             "required_cells": ["cell-s"], "registration": null},
+        ],
+        "profiles": [
+            {"id": "pa-v1", "definition_state": "DRAFT",
+             "requires_profiles": [], "requires_extensions": [],
+             "required_cases": [{"case_id": "H08.shared", "case_version": 1u32,
+                                 "when_extensions": []}],
+             "open_owners": ["TT08"]},
+            {"id": "pb-v1", "definition_state": "DRAFT",
+             "requires_profiles": [], "requires_extensions": [],
+             "required_cases": [{"case_id": "H08.shared", "case_version": 1u32,
+                                 "when_extensions": []}],
+             "open_owners": ["TT08"]},
+        ],
+        "extensions": [],
+    });
+    CaseCatalog::load(
+        &serde_json::to_vec(&doc).unwrap(),
+        scopebase_testkit::CatalogLimits::default(),
+    )
+    .expect("shared-cell catalog must admit")
+}
+
+/// S222: the oracle cap must not count duplicates. One cell reachable
+/// via two affected owners with `max_selected_cells = 1` succeeds in
+/// the selector (its guard skips keys already present); the oracle
+/// must agree instead of erroring at capacity.
+/// Pre-fix the oracle returned LimitExceeded on the second owner.
+#[test]
+fn s222_oracle_cap_ignores_duplicate_cells() {
+    use scopebase_testkit::select::{check_agreement, expected_selection};
+    let catalog = shared_cell_catalog();
+    let limits = SelectionLimits {
+        max_selected_cells: 1,
+        ..SelectionLimits::default()
+    };
+    let m = manifest(vec![Change::cell("cell-s")]);
+    let requested = vec![pid("pa-v1"), pid("pb-v1")];
+    let plan =
+        scopebase_testkit::select::select_affected(&catalog, &m, &requested, &limits).unwrap();
+    let expected = expected_selection(&catalog, &m, &requested, &limits).unwrap();
+    check_agreement(&plan, &expected).expect("oracle must agree with selector");
+    assert_eq!(expected.len(), 1);
+}
