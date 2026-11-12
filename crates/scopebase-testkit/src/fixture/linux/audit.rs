@@ -62109,10 +62109,10 @@ time.sleep(30)
         // L178: the forwarded value of
         // `X.clone()/to_owned()/borrow()` /
         // UFCS (optional turbofish either
-        // side; `std::clone::` full path
-        // for Clone). None ⟹ not a
-        // whole-piece forward.
-        // HUP-CENSUS-SELF.
+        // side; L195 clone/borrow/convert
+        // full paths + From; L196 absolute
+        // `::`). None ⟹ not a whole-piece
+        // forward. HUP-CENSUS-SELF.
         fn forward_receiver(t: &str) -> Option<&str> {
             let t = t.trim();
             // Method form: last forward-call.
@@ -62145,26 +62145,42 @@ time.sleep(30)
                 // `Clone::clone(&inner.clone())`
                 // fails the method end-check).
             }
-            // UFCS form.
-            let u = t.strip_prefix("std::clone::").unwrap_or(t);
-            let u = match u.strip_prefix("Clone") {
-                Some(r) => r,
-                None => match u.strip_prefix("ToOwned") {
-                    Some(r) => r,
-                    None => u.strip_prefix("Borrow")?,
-                },
-            };
-            let u = u.strip_prefix("::")?;
-            let want = if u.starts_with("clone") {
-                "clone"
-            } else if u.starts_with("to_owned") {
-                "to_owned"
-            } else if u.starts_with("borrow") {
-                "borrow"
-            } else {
-                return None;
-            };
-            let u = u.strip_prefix(want)?;
+            // UFCS form (L195 core/borrow/
+            // convert paths; L196 absolute
+            // `::` strips first).
+            let mut u = t.strip_prefix("::").unwrap_or(t);
+            for p in [
+                "std::clone::",
+                "core::clone::",
+                "std::borrow::",
+                "core::borrow::",
+                "std::convert::",
+                "core::convert::",
+            ] {
+                if let Some(r) = u.strip_prefix(p) {
+                    u = r;
+                    break;
+                }
+            }
+            let mut hit = None;
+            for (ty, me) in [
+                ("Clone", "clone"),
+                ("ToOwned", "to_owned"),
+                ("Borrow", "borrow"),
+                ("From", "from"),
+            ] {
+                if let Some(r) = u.strip_prefix(ty) {
+                    let r = r.trim_start();
+                    if let Some(m) = r.strip_prefix("::") {
+                        let m = m.trim_start();
+                        if let Some(after) = m.strip_prefix(me) {
+                            hit = Some(after);
+                            break;
+                        }
+                    }
+                }
+            }
+            let u = hit?;
             let rest = match u.strip_prefix("::") {
                 Some(r) => {
                     let r = r.trim_start();
@@ -62214,6 +62230,7 @@ time.sleep(30)
         // HUP-CENSUS-SELF.
         fn forward_call_arg(s: &str) -> Option<&str> {
             let t = s.trim();
+            let t = t.strip_prefix("::").unwrap_or(t);
             let lp = t.find('(')?;
             let mut callee = t[..lp].trim();
             if let Some(q) = callee.find('<') {
@@ -62378,15 +62395,15 @@ time.sleep(30)
             None
         }
         // Arg-inner of callable wrappers:
-        // `{Box,Arc,Rc}::{new,pin}(...)`
-        // (L175/L194 — optional
+        // `{Box,Arc,Rc}::{new,pin,from}`
+        // (L175/L194/L197 — optional
         // `::<T>`; boxed/sync/rc full
-        // paths). None ⟹ not one.
-        // HUP-CENSUS-SELF.
+        // paths; absolute `::` too).
+        // None ⟹ not one. HUP-CENSUS-SELF.
         fn wrapper_inner_arg(s: &str) -> Option<&str> {
             let wordish =
                 |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
-            let mut s = s;
+            let mut s = s.strip_prefix("::").unwrap_or(s);
             for p in [
                 "std::boxed::",
                 "alloc::boxed::",
@@ -62420,6 +62437,8 @@ time.sleep(30)
                 "new"
             } else if m.starts_with("pin") {
                 "pin"
+            } else if m.starts_with("from") {
+                "from"
             } else {
                 return None;
             };
