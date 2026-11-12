@@ -62108,23 +62108,27 @@ time.sleep(30)
         }
         // L178: the forwarded value of
         // `X.clone()/to_owned()/borrow()/
-        // as_ref()/into()/deref()` /
-        // UFCS (optional turbofish either
+        // as_ref()/into()/deref()/unwrap()/
+        // expect()/join()` / UFCS
+        // (optional turbofish either
         // side; L195 clone/borrow/convert
         // full paths + From; L196 absolute
         // `::`; L198 qualified `<T as
         // Trait>`; L199 as_ref; L203 into;
         // L204 deref/deref_mut; L205 trait
-        // turbofish). None ⟹ not a
-        // whole-piece forward.
+        // turbofish; L208 unwrap/expect
+        // (+Option/Result UFCS); L213 join
+        // (+JoinHandle UFCS)). None ⟹ not
+        // a whole-piece forward.
         // HUP-CENSUS-SELF.
         fn forward_receiver(t: &str) -> Option<&str> {
             let t = t.trim();
             // Method form: last forward-call
             // (longest-prefix first: ties
             // keep the earlier entry, so
-            // `.deref_mut` precedes
-            // `.deref`).
+            // `.deref_mut`/`.unwrap_err`/
+            // `.expect_err` precede their
+            // prefixes).
             let mut hit: Option<(usize, usize)> = None;
             for meth in [
                 ".clone",
@@ -62134,6 +62138,11 @@ time.sleep(30)
                 ".into",
                 ".deref_mut",
                 ".deref",
+                ".unwrap_err",
+                ".unwrap",
+                ".expect_err",
+                ".expect",
+                ".join",
             ] {
                 if let Some(q) = t.rfind(meth) {
                     if hit.map_or(true, |(hq, _)| q > hq) {
@@ -62177,6 +62186,11 @@ time.sleep(30)
                 "core::convert::",
                 "std::ops::",
                 "core::ops::",
+                "std::option::",
+                "core::option::",
+                "std::result::",
+                "core::result::",
+                "std::thread::",
             ] {
                 if let Some(r) = u.strip_prefix(p) {
                     u = r;
@@ -62192,6 +62206,13 @@ time.sleep(30)
                 ("Into", "into"),
                 ("Deref", "deref"),
                 ("DerefMut", "deref_mut"),
+                ("Option", "unwrap"),
+                ("Option", "expect"),
+                ("Result", "unwrap_err"),
+                ("Result", "expect_err"),
+                ("Result", "unwrap"),
+                ("Result", "expect"),
+                ("JoinHandle", "join"),
             ];
             let mut hit = None;
             if u.trim_start().starts_with('<') {
@@ -62279,7 +62300,9 @@ time.sleep(30)
         // L193: arg of a pure-forward call
         // (`identity`/`black_box`, plain or
         // convert/hint-pathed, fn-turbofish
-        // allowed). None ⟹ not one.
+        // allowed; L208: `Some`/`Ok`/`Err`
+        // ctors, plain or option/result-
+        // pathed). None ⟹ not one.
         // HUP-CENSUS-SELF.
         fn forward_call_arg(s: &str) -> Option<&str> {
             let t = s.trim();
@@ -62297,11 +62320,12 @@ time.sleep(30)
                 Some((p, n)) => (p, n),
                 None => ("", callee),
             };
-            if name != "identity" && name != "black_box" {
-                return None;
-            }
-            match prefix {
-                "" | "std::convert" | "core::convert" | "std::hint" | "core::hint" => {}
+            match (prefix, name) {
+                ("", "identity" | "black_box" | "Some" | "Ok" | "Err")
+                | ("std::convert" | "core::convert", "identity")
+                | ("std::hint" | "core::hint", "black_box")
+                | ("std::option" | "core::option", "Some")
+                | ("std::result" | "core::result", "Ok" | "Err") => {}
                 _ => return None,
             }
             let rest = &t[lp..];
@@ -62340,12 +62364,102 @@ time.sleep(30)
             }
             false
         }
+        // L210: cut a depth-0 ` as T`
+        // cast suffix (angle-aware, so
+        // qualified `<T as Trait>` paths
+        // keep theirs; angles tracked
+        // only outside (){}[] so
+        // comparisons don't blind it).
+        // No comparison-FP: `as` never
+        // compiles on closures/Commands
+        // (except `&dyn`, unorderable).
+        // None ⟹ no top-level cast.
+        // HUP-CENSUS-SELF.
+        fn strip_as_cast(s: &str) -> Option<&str> {
+            let bytes = s.as_bytes();
+            let mut parens = 0i32;
+            let mut braces = 0i32;
+            let mut brackets = 0i32;
+            let mut angles = 0i32;
+            let mut cut = None;
+            let wordish = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+            let mut i = 0usize;
+            while i < bytes.len() {
+                let b = bytes[i];
+                match b {
+                    b'(' => parens += 1,
+                    b')' => parens -= 1,
+                    b'{' => braces += 1,
+                    b'}' => braces -= 1,
+                    b'[' => brackets += 1,
+                    b']' => brackets -= 1,
+                    b'<' if parens == 0 && braces == 0 && brackets == 0 => {
+                        angles += 1;
+                    }
+                    b'>' if parens == 0 && braces == 0 && brackets == 0 && angles > 0 => {
+                        angles -= 1;
+                    }
+                    _ => {}
+                }
+                if parens == 0
+                    && braces == 0
+                    && brackets == 0
+                    && angles == 0
+                    && b == b'a'
+                    && s[i..].starts_with("as")
+                {
+                    let prev_ok = i == 0 || !wordish(bytes[i - 1]);
+                    let next_ok = s.len() == i + 2 || !wordish(bytes[i + 2]);
+                    if prev_ok && next_ok && !s[..i].trim().is_empty() {
+                        cut = Some(i);
+                    }
+                }
+                i += 1;
+            }
+            cut.map(|i| s[..i].trim())
+        }
+        // L211: cut a trailing `[index]`
+        // (`X[i]` borrows from X). Array
+        // literals (leading `[`) don't
+        // cut. None ⟹ no index suffix.
+        // HUP-CENSUS-SELF.
+        fn strip_index_suffix(s: &str) -> Option<&str> {
+            let t = s.trim();
+            if !t.ends_with(']') || t.starts_with('[') {
+                return None;
+            }
+            let mut depth = 0i32;
+            for (idx, c) in t.char_indices().rev() {
+                match c {
+                    ']' => depth += 1,
+                    '[' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            let left = t[..idx].trim();
+                            if left.is_empty() {
+                                return None;
+                            }
+                            let pc = left.chars().last()?;
+                            if !(pc.is_ascii_alphanumeric() || pc == '_' || pc == ']' || pc == ')')
+                            {
+                                return None;
+                            }
+                            return Some(left);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
         // Strip forward-wraps: leading
         // `&`/`*`/`mut`/space chains plus
         // whole-piece grouping parens plus
         // closure headers (L201/L202 — a
         // closure forwards its body's
-        // value: invocation yields it).
+        // value: invocation yields it)
+        // plus `as`-cast (L210) and
+        // `[index]` (L211) suffixes.
         // None ⟹ past 32 strips (caller
         // goes loud). HUP-CENSUS-SELF.
         fn strip_forward_wraps(mut t: &str) -> Option<&str> {
@@ -62370,6 +62484,14 @@ time.sleep(30)
                 }
                 if let Some(body) = closure_body_of(s) {
                     t = body.trim();
+                    continue;
+                }
+                if let Some(cut) = strip_as_cast(s) {
+                    t = cut;
+                    continue;
+                }
+                if let Some(cut) = strip_index_suffix(s) {
+                    t = cut;
                     continue;
                 }
                 if s.starts_with('(') && paren_closed_at_end(s) {
@@ -62440,6 +62562,31 @@ time.sleep(30)
         // Inner text of a leading balanced
         // `{...}` (None ⟹ not a block or
         // unbalanced). HUP-CENSUS-SELF.
+        // Inner of a leading balanced
+        // `[...]` closing at the end
+        // (array literal; L211). None ⟹
+        // not one. HUP-CENSUS-SELF.
+        fn bracket_literal(s: &str) -> Option<&str> {
+            let t = s.trim();
+            if !t.starts_with('[') {
+                return None;
+            }
+            let mut depth = 0i32;
+            for (idx, c) in t.char_indices() {
+                if c == '[' {
+                    depth += 1;
+                } else if c == ']' {
+                    depth -= 1;
+                    if depth == 0 {
+                        if t[idx + 1..].trim().is_empty() {
+                            return Some(t[1..idx].trim());
+                        }
+                        return None;
+                    }
+                }
+            }
+            None
+        }
         fn block_inner_of(s: &str) -> Option<&str> {
             if !s.starts_with('{') {
                 return None;
@@ -62483,6 +62630,73 @@ time.sleep(30)
             }
             Some(body)
         }
+        // Value candidates of a block
+        // INNER: the tail (if any) plus
+        // every `break`/`return` exit
+        // value (L206/L209).
+        // HUP-CENSUS-SELF.
+        fn block_value_cands(inn: &str) -> Vec<&str> {
+            value_pieces(inn)
+                .into_iter()
+                .map(|q| q.trim())
+                .filter(|q| !q.is_empty())
+                .collect()
+        }
+        // Every candidate peels to the
+        // same core ⟹ it (L206/L209
+        // all-equal rule). None ⟹ empty,
+        // past-cap, or divergent (caller
+        // falls back or stays silent —
+        // mixed values are residual).
+        // HUP-CENSUS-SELF.
+        fn all_peel_equal<'a>(cands: &[&'a str]) -> Option<&'a str> {
+            let mut cores: Vec<&str> = Vec::new();
+            for c in cands {
+                cores.push(peel_value_core(c.trim())?);
+            }
+            let first = cores.first()?;
+            if cores.iter().all(|u| *u == *first) {
+                Some(first)
+            } else {
+                None
+            }
+        }
+        // Factory RETURN shared by
+        // `new_cyclic` (L200/L201/L202/
+        // L206) and `thread::spawn`
+        // (L213): an inline-closure body
+        // (all-equal candidates, else the
+        // tail), or a lone factory name
+        // peeled for downstream
+        // recording-gated resolution.
+        // None ⟹ not a factory shape.
+        // HUP-CENSUS-SELF.
+        fn factory_return(arg: &str) -> Option<&str> {
+            let lone = |t: &str| {
+                !t.is_empty() && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            };
+            if let Some(body) = closure_body_of(arg) {
+                let body = body.trim();
+                match block_inner_of(body) {
+                    None => return Some(body),
+                    Some(inn) => {
+                        let cands = block_value_cands(inn);
+                        if let Some(core) = all_peel_equal(&cands) {
+                            return Some(core);
+                        }
+                        let tail = value_pieces(inn)[0].trim();
+                        if !tail.is_empty() {
+                            return Some(tail);
+                        }
+                        return None;
+                    }
+                }
+            }
+            match peel_value_core(arg.trim()) {
+                Some(u) if lone(u) => Some(u),
+                _ => None,
+            }
+        }
         // Arg-inner of callable wrappers:
         // `{Box,Arc,Rc}::{new,pin,from}`
         // (L175/L194/L197 — optional
@@ -62490,10 +62704,9 @@ time.sleep(30)
         // paths; absolute `::` too) plus
         // `{Arc,Rc}::new_cyclic` (L200 —
         // the wrapped value is the
-        // factory RETURN: inline body,
-        // single-exit fallback (L201), or
-        // lone factory name (L202)). None
-        // ⟹ not one. HUP-CENSUS-SELF.
+        // factory RETURN: shared
+        // contract). None ⟹ not one.
+        // HUP-CENSUS-SELF.
         fn wrapper_inner_arg(s: &str) -> Option<&str> {
             let wordish =
                 |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
@@ -62558,64 +62771,213 @@ time.sleep(30)
                         }
                         // L200: `new_cyclic`
                         // (Arc/Rc only) wraps
-                        // the factory RETURN:
-                        // an inline-closure
-                        // body, or a lone
-                        // factory name
-                        // resolved downstream
-                        // (L202;
-                        // recording-gated).
+                        // the factory RETURN
+                        // (shared contract).
                         if wrap == "Box" {
                             return None;
                         }
-                        if let Some(body) = closure_body_of(found) {
-                            let body = body.trim();
-                            match block_inner_of(body) {
-                                None => return Some(body),
-                                Some(inn) => {
-                                    let pcs = value_pieces(inn);
-                                    let tail = pcs[0].trim();
-                                    if !tail.is_empty() {
-                                        return Some(tail);
-                                    }
-                                    // L201: empty tail
-                                    // + exactly one
-                                    // exit value ⟹ it
-                                    // (multi-exit stays
-                                    // residual).
-                                    let exits: Vec<&str> = pcs[1..]
-                                        .iter()
-                                        .map(|q| q.trim())
-                                        .filter(|q| !q.is_empty())
-                                        .collect();
-                                    if exits.len() == 1 {
-                                        return Some(exits[0]);
-                                    }
-                                    return None;
-                                }
-                            }
-                        }
-                        // L202: factory by name
-                        // (or a forward chain
-                        // to one) — peel to
-                        // the lone name.
-                        return match peel_value_core(found.trim()) {
-                            Some(u)
-                                if !u.is_empty()
-                                    && u.bytes()
-                                        .all(|b| b.is_ascii_alphanumeric() || b == b'_') =>
-                            {
-                                Some(u)
-                            }
-                            _ => None,
-                        };
+                        return factory_return(found);
                     }
                 }
             }
             None
         }
+        // L207: body of an immediately-
+        // invoked closure (`(closure)(args)`;
+        // block/expr-call IIFEs stay
+        // residual). None ⟹ not one.
+        // HUP-CENSUS-SELF.
+        fn iife_body(s: &str) -> Option<&str> {
+            let t = s.trim();
+            if !t.starts_with('(') {
+                return None;
+            }
+            let mut parens = 0i32;
+            let mut end = None;
+            for (idx, c) in t.char_indices() {
+                if c == '(' {
+                    parens += 1;
+                } else if c == ')' {
+                    parens -= 1;
+                    if parens == 0 {
+                        end = Some(idx);
+                        break;
+                    }
+                }
+            }
+            let end = end?;
+            let rest = t[end + 1..].trim_start();
+            if !rest.starts_with('(') || !paren_closed_at_end(rest) {
+                return None;
+            }
+            closure_body_of(t[1..end].trim())
+        }
+        // L213: factory RETURN of free-fn
+        // `thread::spawn` (shared
+        // contract; `Builder`/`Scope`
+        // stays residual). None ⟹ not one.
+        // HUP-CENSUS-SELF.
+        fn spawn_factory_arg(s: &str) -> Option<&str> {
+            let wordish =
+                |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+            let t = s.trim();
+            let t = t.strip_prefix("::").unwrap_or(t);
+            let mut u = t;
+            for p in ["std::thread::", "thread::"] {
+                if let Some(r) = u.strip_prefix(p) {
+                    u = r;
+                    break;
+                }
+            }
+            let r = u.strip_prefix("spawn")?;
+            if wordish(r.chars().next()) {
+                return None;
+            }
+            let mut rest = r.trim_start();
+            if rest.starts_with('<') {
+                rest = skip_angle_brackets(rest)?.trim_start();
+            }
+            let arg = rest.strip_prefix('(')?;
+            let mut parens = 1i32;
+            for (idx, c) in arg.char_indices() {
+                if c == '(' {
+                    parens += 1;
+                } else if c == ')' {
+                    parens -= 1;
+                    if parens == 0 {
+                        return factory_return(arg[..idx].trim());
+                    }
+                }
+            }
+            None
+        }
+        // L212: `mem::replace(&mut slot, _)`
+        // forwards the SLOT (the old
+        // value). None ⟹ not one.
+        // HUP-CENSUS-SELF.
+        fn mem_replace_slot(s: &str) -> Option<&str> {
+            let wordish =
+                |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+            let t = s.trim();
+            let t = t.strip_prefix("::").unwrap_or(t);
+            let lp = t.find('(')?;
+            let mut callee = t[..lp].trim();
+            if let Some(q) = callee.find('<') {
+                let after = skip_angle_brackets(&callee[q..])?;
+                if !after.trim().is_empty() {
+                    return None;
+                }
+                callee = callee[..q].trim();
+            }
+            match callee {
+                "mem::replace" | "std::mem::replace" | "core::mem::replace" => {}
+                _ => return None,
+            }
+            let rest = &t[lp..];
+            if !paren_closed_at_end(rest) {
+                return None;
+            }
+            let mut parens = 0i32;
+            let mut cut = None;
+            for (idx, c) in rest.char_indices() {
+                if c == '(' {
+                    parens += 1;
+                } else if c == ')' {
+                    parens -= 1;
+                } else if c == ',' && parens == 1 && cut.is_none() {
+                    cut = Some(idx);
+                }
+            }
+            let cut = cut?;
+            let mut slot = rest[1..cut].trim();
+            slot = slot
+                .strip_prefix('&')
+                .map(|x| x.trim_start())
+                .unwrap_or(slot);
+            if let Some(r) = slot.strip_prefix("mut") {
+                if !wordish(r.chars().next()) {
+                    slot = r.trim_start();
+                }
+            }
+            if slot.is_empty() {
+                return None;
+            }
+            Some(slot)
+        }
+        // L209: `if`-led value whose arm
+        // values all peel equal ⟹ the core.
+        // Arms = depth-0 `{...}` spans not
+        // followed by `=` (patterns and
+        // literals; operator-followed
+        // cond-blocks stay residual).
+        // No-`else` ifs are ()-typed
+        // (never ctors); `match` stays
+        // residual. None ⟹ not one.
+        // HUP-CENSUS-SELF.
+        fn branch_forward(s: &str) -> Option<&str> {
+            let wordish =
+                |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+            let t = s.trim();
+            let r = t.strip_prefix("if")?;
+            if wordish(r.chars().next()) {
+                return None;
+            }
+            let mut arms: Vec<&str> = Vec::new();
+            let mut parens = 0i32;
+            let mut braces = 0i32;
+            let mut brackets = 0i32;
+            let mut start = None;
+            for (idx, c) in t.char_indices() {
+                match c {
+                    '(' => parens += 1,
+                    ')' => {
+                        parens -= 1;
+                        if parens < 0 {
+                            return None;
+                        }
+                    }
+                    '[' => brackets += 1,
+                    ']' => {
+                        brackets -= 1;
+                        if brackets < 0 {
+                            return None;
+                        }
+                    }
+                    '{' => {
+                        if parens == 0 && braces == 0 && brackets == 0 {
+                            start = Some(idx);
+                        }
+                        braces += 1;
+                    }
+                    '}' => {
+                        braces -= 1;
+                        if braces < 0 {
+                            return None;
+                        }
+                        if parens == 0 && braces == 0 && brackets == 0 {
+                            if let Some(st) = start.take() {
+                                let after = t[idx + 1..].trim_start();
+                                if !after.starts_with('=') {
+                                    arms.push(t[st + 1..idx].trim());
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if arms.is_empty() {
+                return None;
+            }
+            let mut cands: Vec<&str> = Vec::new();
+            for arm in arms {
+                cands.extend(block_value_cands(arm));
+            }
+            all_peel_equal(&cands)
+        }
         // Peel ref/paren wraps + wrapper-args +
-        // forward-calls/chains to the core
+        // forward-calls/chains + IIFE/spawn/
+        // replace/if-branches to the core
         // value (the one forward normalizer;
         // every record/capture/tail path
         // uses it). None ⟹ past 32 peels
@@ -62632,6 +62994,22 @@ time.sleep(30)
                     None => s,
                 };
                 let s = match forward_receiver(s) {
+                    Some(x) => x.trim(),
+                    None => s,
+                };
+                let s = match iife_body(s) {
+                    Some(x) => x.trim(),
+                    None => s,
+                };
+                let s = match spawn_factory_arg(s) {
+                    Some(x) => x.trim(),
+                    None => s,
+                };
+                let s = match mem_replace_slot(s) {
+                    Some(x) => x.trim(),
+                    None => s,
+                };
+                let s = match branch_forward(s) {
                     Some(x) => x.trim(),
                     None => s,
                 };
@@ -63790,6 +64168,21 @@ time.sleep(30)
                                 return true;
                             }
                         }
+                    }
+                }
+                // L211: array-literal
+                // elements carrying taint
+                // (`[inner]`).
+                if let Some(elts) = bracket_literal(p.trim()) {
+                    if taint_hits(elts, tainted) {
+                        return true;
+                    }
+                    if elts
+                        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                        .filter(|w| !w.is_empty())
+                        .any(|w| caps.iter().any(|a| a.as_str() == w))
+                    {
+                        return true;
                     }
                 }
                 let mut start = 0usize;
