@@ -62248,27 +62248,6 @@ time.sleep(30)
             }
             None
         }
-        // Strip chained whole-piece clones
-        // (L182 refs/parens unwrap between
-        // peels). None ⟹ past 32 peels —
-        // L186 goes LOUD there (no cap
-        // left to exceed). HUP-CENSUS-SELF.
-        fn unwrap_clone_chain(mut t: &str) -> Option<&str> {
-            for _ in 0..32 {
-                t = strip_forward_wraps(t)?;
-                let Some(x) = clone_receiver(t) else {
-                    break;
-                };
-                t = x;
-            }
-            // Distinguish clean finish from
-            // cap-exhaustion: one more peel
-            // available ⟹ we capped out.
-            if strip_forward_wraps(t)?.trim() != t.trim() || clone_receiver(t).is_some() {
-                return None;
-            }
-            Some(t)
-        }
         // L177: PIECE (a block tail/exit) is a
         // lone ident forwarding a recorded
         // name or a block-local `let` (up to 8
@@ -62278,7 +62257,7 @@ time.sleep(30)
             let lone = |t: &str| {
                 !t.is_empty() && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
             };
-            let mut t = match unwrap_clone_chain(piece.trim()) {
+            let mut t = match peel_value_core(piece.trim()) {
                 None => return true,
                 Some(u) => u,
             };
@@ -62295,7 +62274,7 @@ time.sleep(30)
                 // L184: clone-chains unwrap
                 // before the closure/lone
                 // tests (L186 past-cap loud).
-                let rhs = match unwrap_clone_chain(rhs.trim()) {
+                let rhs = match peel_value_core(rhs.trim()) {
                     None => return true,
                     Some(u) => u,
                 };
@@ -62330,15 +62309,18 @@ time.sleep(30)
             None
         }
         // Arg-inner of `Box::new(...)` /
-        // `Box::<T>::new(...)` (L179
-        // `std::boxed::` full path too;
-        // `alloc::boxed::` is no_std-only —
-        // residual). None ⟹ not Box-form.
+        // `Box::<T>::new(...)` (`std::boxed::`
+        // (L179) and `alloc::boxed::` (L192
+        // — usable under std too) full
+        // paths). None ⟹ not Box-form.
         // HUP-CENSUS-SELF.
         fn box_inner_arg(s: &str) -> Option<&str> {
             let wordish =
                 |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
-            let s = s.strip_prefix("std::boxed::").unwrap_or(s);
+            let s = s
+                .strip_prefix("std::boxed::")
+                .or_else(|| s.strip_prefix("alloc::boxed::"))
+                .unwrap_or(s);
             let r = s.strip_prefix("Box")?;
             if wordish(r.chars().next()) {
                 return None;
@@ -62370,15 +62352,22 @@ time.sleep(30)
             }
             None
         }
-        // Peel ref/paren wraps + Box-args to
-        // the core value (L187/L188/L189).
-        // None ⟹ past 32 peels (caller
-        // goes loud). HUP-CENSUS-SELF.
+        // Peel ref/paren wraps + Box-args +
+        // clone-chains to the core value
+        // (L187/L188/L189/L191 — the one
+        // forward normalizer; every
+        // record/capture/tail path uses
+        // it). None ⟹ past 32 peels
+        // (caller goes loud). HUP-CENSUS-SELF.
         fn peel_value_core(mut t: &str) -> Option<&str> {
             for _ in 0..32 {
                 let s = strip_forward_wraps(t)?;
                 let s = match box_inner_arg(s) {
                     Some(inn) => inn.trim(),
+                    None => s,
+                };
+                let s = match clone_receiver(s) {
+                    Some(x) => x.trim(),
                     None => s,
                 };
                 if s.len() == t.len() {
@@ -62485,7 +62474,7 @@ time.sleep(30)
                             // of a recorded name
                             // (L186: past-cap is
                             // loud).
-                            match unwrap_clone_chain(p.trim()) {
+                            match peel_value_core(p.trim()) {
                                 None => true,
                                 Some(u) => {
                                     !u.is_empty()
@@ -63431,7 +63420,7 @@ time.sleep(30)
             let lone = |t: &str| {
                 !t.is_empty() && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
             };
-            let mut t = match unwrap_clone_chain(piece.trim()) {
+            let mut t = match peel_value_core(piece.trim()) {
                 None => return true,
                 Some(u) => u,
             };
@@ -63445,7 +63434,7 @@ time.sleep(30)
                 let Some(rhs) = block_inner_let_rhs(inner, t) else {
                     return false;
                 };
-                let rhs = match unwrap_clone_chain(rhs.trim()) {
+                let rhs = match peel_value_core(rhs.trim()) {
                     None => return true,
                     Some(u) => u,
                 };
@@ -63507,7 +63496,7 @@ time.sleep(30)
                 // an always-name stays
                 // always (L186 past-cap is
                 // loud).
-                match unwrap_clone_chain(p.trim()) {
+                match peel_value_core(p.trim()) {
                     None => return true,
                     Some(u) => {
                         if !u.is_empty()
