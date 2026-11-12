@@ -62021,11 +62021,12 @@ time.sleep(30)
         // (only starts closures), `async`
         // + `|`-before-`{` (else a future),
         // L174 `{...}` (the tail/exits may
-        // BE the closure), or L175
-        // `Box::new(...)` (+ turbofish;
-        // boxed — `Deref`-invocable; a
-        // shadowed `Box` over-records,
-        // loud-first). A bare `|` ANYWHERE
+        // BE the closure), or L175/L194
+        // callable wrappers (`Box`/`Arc`/
+        // `Rc` + new/pin — `Deref`-
+        // invocable; a shadowed name
+        // over-records, loud-first). A bare
+        // `|` ANYWHERE
         // is not enough (or-patterns /
         // `||` / bit-or in if/match values
         // seed the R37 bare-cascade).
@@ -62105,17 +62106,26 @@ time.sleep(30)
             }
             Some(rhs)
         }
-        // L178: the cloned value of `X.clone
-        // (...)` / UFCS `Clone::clone(X)`
-        // (optional turbofish either side;
-        // `std::clone::` full path too).
-        // None ⟹ not a whole-piece clone.
+        // L178: the forwarded value of
+        // `X.clone()/to_owned()/borrow()` /
+        // UFCS (optional turbofish either
+        // side; `std::clone::` full path
+        // for Clone). None ⟹ not a
+        // whole-piece forward.
         // HUP-CENSUS-SELF.
-        fn clone_receiver(t: &str) -> Option<&str> {
+        fn forward_receiver(t: &str) -> Option<&str> {
             let t = t.trim();
-            // Method form: last `.clone`.
-            if let Some(q) = t.rfind(".clone") {
-                let after = &t[q + ".clone".len()..];
+            // Method form: last forward-call.
+            let mut hit: Option<(usize, usize)> = None;
+            for meth in [".clone", ".to_owned", ".borrow"] {
+                if let Some(q) = t.rfind(meth) {
+                    if hit.map_or(true, |(hq, _)| q > hq) {
+                        hit = Some((q, meth.len()));
+                    }
+                }
+            }
+            if let Some((q, len)) = hit {
+                let after = &t[q + len..];
                 let rest = match after.strip_prefix("::") {
                     Some(r) => {
                         let r = r.trim_start();
@@ -62137,9 +62147,24 @@ time.sleep(30)
             }
             // UFCS form.
             let u = t.strip_prefix("std::clone::").unwrap_or(t);
-            let u = u.strip_prefix("Clone")?;
+            let u = match u.strip_prefix("Clone") {
+                Some(r) => r,
+                None => match u.strip_prefix("ToOwned") {
+                    Some(r) => r,
+                    None => u.strip_prefix("Borrow")?,
+                },
+            };
             let u = u.strip_prefix("::")?;
-            let u = u.strip_prefix("clone")?;
+            let want = if u.starts_with("clone") {
+                "clone"
+            } else if u.starts_with("to_owned") {
+                "to_owned"
+            } else if u.starts_with("borrow") {
+                "borrow"
+            } else {
+                return None;
+            };
+            let u = u.strip_prefix(want)?;
             let rest = match u.strip_prefix("::") {
                 Some(r) => {
                     let r = r.trim_start();
@@ -62177,6 +62202,50 @@ time.sleep(30)
                     parens -= 1;
                     if parens == 0 {
                         return Some(arg[..idx].trim());
+                    }
+                }
+            }
+            None
+        }
+        // L193: arg of a pure-forward call
+        // (`identity`/`black_box`, plain or
+        // convert/hint-pathed, fn-turbofish
+        // allowed). None ⟹ not one.
+        // HUP-CENSUS-SELF.
+        fn forward_call_arg(s: &str) -> Option<&str> {
+            let t = s.trim();
+            let lp = t.find('(')?;
+            let mut callee = t[..lp].trim();
+            if let Some(q) = callee.find('<') {
+                let after = skip_angle_brackets(&callee[q..])?;
+                if !after.trim().is_empty() {
+                    return None;
+                }
+                callee = callee[..q].trim();
+            }
+            let (prefix, name) = match callee.rsplit_once("::") {
+                Some((p, n)) => (p, n),
+                None => ("", callee),
+            };
+            if name != "identity" && name != "black_box" {
+                return None;
+            }
+            match prefix {
+                "" | "std::convert" | "core::convert" | "std::hint" | "core::hint" => {}
+                _ => return None,
+            }
+            let rest = &t[lp..];
+            if !paren_closed_at_end(rest) {
+                return None;
+            }
+            let mut parens = 0i32;
+            for (idx, c) in rest.char_indices() {
+                if c == '(' {
+                    parens += 1;
+                } else if c == ')' {
+                    parens -= 1;
+                    if parens == 0 {
+                        return Some(rest[1..idx].trim());
                     }
                 }
             }
@@ -62308,20 +62377,32 @@ time.sleep(30)
             }
             None
         }
-        // Arg-inner of `Box::new(...)` /
-        // `Box::<T>::new(...)` (`std::boxed::`
-        // (L179) and `alloc::boxed::` (L192
-        // — usable under std too) full
-        // paths). None ⟹ not Box-form.
+        // Arg-inner of callable wrappers:
+        // `{Box,Arc,Rc}::{new,pin}(...)`
+        // (L175/L194 — optional
+        // `::<T>`; boxed/sync/rc full
+        // paths). None ⟹ not one.
         // HUP-CENSUS-SELF.
-        fn box_inner_arg(s: &str) -> Option<&str> {
+        fn wrapper_inner_arg(s: &str) -> Option<&str> {
             let wordish =
                 |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
-            let s = s
-                .strip_prefix("std::boxed::")
-                .or_else(|| s.strip_prefix("alloc::boxed::"))
-                .unwrap_or(s);
-            let r = s.strip_prefix("Box")?;
+            let mut s = s;
+            for p in [
+                "std::boxed::",
+                "alloc::boxed::",
+                "std::sync::",
+                "alloc::sync::",
+                "std::rc::",
+                "alloc::rc::",
+            ] {
+                if let Some(r) = s.strip_prefix(p) {
+                    s = r;
+                    break;
+                }
+            }
+            let r = ["Box", "Arc", "Rc"]
+                .iter()
+                .find_map(|w| s.strip_prefix(w))?;
             if wordish(r.chars().next()) {
                 return None;
             }
@@ -62334,7 +62415,15 @@ time.sleep(30)
             } else {
                 return None;
             }
-            let call = rest.strip_prefix("::new")?;
+            let m = rest.strip_prefix("::")?;
+            let meth = if m.starts_with("new") {
+                "new"
+            } else if m.starts_with("pin") {
+                "pin"
+            } else {
+                return None;
+            };
+            let call = m.strip_prefix(meth)?;
             if wordish(call.chars().next()) {
                 return None;
             }
@@ -62352,21 +62441,24 @@ time.sleep(30)
             }
             None
         }
-        // Peel ref/paren wraps + Box-args +
-        // clone-chains to the core value
-        // (L187/L188/L189/L191 — the one
-        // forward normalizer; every
-        // record/capture/tail path uses
-        // it). None ⟹ past 32 peels
+        // Peel ref/paren wraps + wrapper-args +
+        // forward-calls/chains to the core
+        // value (the one forward normalizer;
+        // every record/capture/tail path
+        // uses it). None ⟹ past 32 peels
         // (caller goes loud). HUP-CENSUS-SELF.
         fn peel_value_core(mut t: &str) -> Option<&str> {
             for _ in 0..32 {
                 let s = strip_forward_wraps(t)?;
-                let s = match box_inner_arg(s) {
+                let s = match wrapper_inner_arg(s) {
                     Some(inn) => inn.trim(),
                     None => s,
                 };
-                let s = match clone_receiver(s) {
+                let s = match forward_call_arg(s) {
+                    Some(a) => a.trim(),
+                    None => s,
+                };
+                let s = match forward_receiver(s) {
                     Some(x) => x.trim(),
                     None => s,
                 };
@@ -62431,14 +62523,13 @@ time.sleep(30)
                 }
                 return false;
             }
-            // L175: `Box::new(...)` wraps its
-            // arg in parens (optional `Box::<T>`
-            // turbofish first; L179 full-path
-            // too) — unwrap one balanced
-            // group and re-test.
-            if let Some(inner) = box_inner_arg(s) {
+            // L175/L194: callable wrappers
+            // (`Box`/`Arc`/`Rc` + new/pin,
+            // turbofish + full paths) — unwrap
+            // one balanced group and re-test.
+            if let Some(inner) = wrapper_inner_arg(s) {
                 return closure_at_start_depth(inner, depth + 1, all) || {
-                    // Boxed forward of a
+                    // Wrapped forward of a
                     // recorded name (same
                     // L177 rationale).
                     let t = inner.trim();
