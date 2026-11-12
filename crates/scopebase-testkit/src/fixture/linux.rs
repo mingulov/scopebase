@@ -89,6 +89,41 @@ pub(crate) enum DedicatedSession {
 pub(crate) fn ensure_dedicated_session() -> DedicatedSession {
     static DEDICATED: std::sync::OnceLock<DedicatedSession> = std::sync::OnceLock::new();
     *DEDICATED.get_or_init(|| {
+        // HUP-001 + XRV1-R24: no-op SIGHUP
+        // handler in EVERY image (suite AND
+        // probes — installed BEFORE the
+        // probe branch). Probes share the
+        // suite group by R23-008 design and
+        // default disposition dies on a
+        // group-HUP (the 4-pack killer —
+        // proven by bpftrace: external
+        // killpg HUP+CONT). A HANDLER (exec
+        // resets it) not SIG_IGN (exec
+        // preserves it — exec'd fixtures
+        // keep default HUP-death either way
+        // (reset is per-exec, not per-image):
+        // the orphan-retirement path is
+        // unaffected; fork-only children
+        // inherit the no-op in-suite (P3)
+        // and now in-probe (parity).
+        // The dedicated session/group orphans on
+        // protector-exit (gate proof: self-grouped
+        // python probe + H joining our group +
+        // probe exiting at once + a stopped
+        // co-resident ⟹ kernel HUPs our group);
+        // default disposition dies (6 gate
+        // deaths), the handler survives
+        // (SA_RESTART — no EINTR spill).
+        // SAFETY: sigaction-set with a stack
+        // action (zeroed mask/flags-then-set);
+        // glibc supplies SA_RESTORER (wrapper
+        // contract, no pre-main dependence
+        // beyond open/stat already used here).
+        let mut act: libc::sigaction = unsafe { std::mem::zeroed() };
+        act.sa_sigaction = orphan_hup_noop as *const () as usize;
+        act.sa_flags = libc::SA_RESTART;
+        let set = unsafe { libc::sigaction(libc::SIGHUP, &act, std::ptr::null_mut()) };
+        debug_assert_eq!(set, 0, "HUP-001 handler install must succeed");
         // Cycle 2: probes stay in the wrapper's session.
         if running_as_probe() {
             return DedicatedSession::SharedWithWrapper;
@@ -106,6 +141,59 @@ pub(crate) fn ensure_dedicated_session() -> DedicatedSession {
         }
         DedicatedSession::BySetsid
     })
+}
+
+/// HUP-001 no-op (the handler the suite
+/// installs at load — a HANDLER (exec resets
+/// it to default for fixtures) NOT SIG_IGN
+/// (exec preserves ignored — fixtures must
+/// keep default HUP-death: the orphan-
+/// retirement path relies on it)).
+#[cfg(all(test, feature = "linux-fixtures", target_arch = "x86_64"))]
+pub(crate) extern "C" fn orphan_hup_noop(_sig: libc::c_int) {}
+
+/// HUP-001 + XRV1-R24: query our own SIGHUP
+/// disposition (pins only — every image
+/// load-installs the no-op (suite AND
+/// probes); exec'd grandchildren reset to
+/// default across exec; fork-only children
+/// inherit the handler). Returns the raw
+/// handler addr — None when the query fails.
+#[cfg(all(test, feature = "linux-fixtures", target_arch = "x86_64"))]
+pub(crate) fn hup_disposition_for_test() -> Option<usize> {
+    let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+    // SAFETY: sigaction-get writes old only.
+    if unsafe { libc::sigaction(libc::SIGHUP, std::ptr::null(), &mut old) } != 0 {
+        return None;
+    }
+    Some(old.sa_sigaction)
+}
+
+/// XRV1-R26 L147: post-exec SIGHUP
+/// disposition snapshot (0 = unsampled,
+/// 1 = SIG_DFL, 2 = SIG_IGN, 3 =
+/// caught). Written once by the
+/// `.init_array.00000` sampler BEFORE
+/// the 00001 handler install: in a
+/// seam-armed probe it reads 2 (IGN
+/// survives exec — the window is
+/// closed); unarmed it reads 1 (exec
+/// reset to default — the window is
+/// open). Misordering (sampler at/after
+/// the install) reads 3 — the pin REDs,
+/// so the ordering is self-policing.
+#[cfg(all(test, feature = "linux-fixtures", target_arch = "x86_64"))]
+static HUP_WINDOW_DISPOSITION: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// XRV1-R26 L147: read the window
+/// snapshot (pins only). None when
+/// unsampled (no sampler entry linked).
+#[cfg(all(test, feature = "linux-fixtures", target_arch = "x86_64"))]
+pub(crate) fn hup_window_disposition_for_test() -> Option<u8> {
+    match HUP_WINDOW_DISPOSITION.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        n => Some(n),
+    }
 }
 
 /// R23-008-fix (C8, cycle 2): are we a re-exec'd probe?
@@ -208,6 +296,36 @@ fn running_as_probe() -> bool {
 /// the pointer before `main`/libtest. Re-exec'd probes
 /// skip (see `running_as_probe` — they share the
 /// wrapper's session by design).
+/// XRV1-R26 L147: snapshot the post-exec
+/// SIGHUP disposition BEFORE the 00001
+/// handler install (the linker runs
+/// `.init_array.NNNNN` entries in
+/// numeric order). Pre-main-safe:
+/// sigaction-get (raw syscall, stack
+/// struct) + one relaxed atomic store —
+/// no allocation, no locks, no libc-init
+/// dependence.
+#[cfg(all(test, feature = "linux-fixtures", target_arch = "x86_64"))]
+extern "C" fn sample_hup_window_disposition_at_load() {
+    let mut old: libc::sigaction = unsafe { std::mem::zeroed() };
+    // SAFETY: sigaction-get writes old only.
+    let class = if unsafe { libc::sigaction(libc::SIGHUP, std::ptr::null(), &mut old) } != 0 {
+        0u8
+    } else if old.sa_sigaction == libc::SIG_DFL as usize {
+        1u8
+    } else if old.sa_sigaction == libc::SIG_IGN as usize {
+        2u8
+    } else {
+        3u8
+    };
+    HUP_WINDOW_DISPOSITION.store(class, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(all(test, feature = "linux-fixtures", target_arch = "x86_64"))]
+#[used]
+#[link_section = ".init_array.00000"]
+static SAMPLE_HUP_WINDOW_AT_LOAD: extern "C" fn() = sample_hup_window_disposition_at_load;
+
 #[cfg(all(test, feature = "linux-fixtures", target_arch = "x86_64"))]
 #[used]
 #[link_section = ".init_array.00001"]

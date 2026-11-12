@@ -80,6 +80,9 @@ const BPF_LD_ABS_W: u16 = 0x20;
 const BPF_JEQ_K: u16 = 0x15;
 const BPF_JGE_K: u16 = 0x35;
 const BPF_RET_K: u16 = 0x06;
+// ALU AND K: BPF_ALU (0x04) | BPF_AND (0x50) |
+// BPF_K (0x00) — A &= K (classic-BPF UAPI).
+const BPF_ALU_AND_K: u16 = 0x54;
 const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
 const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
 const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
@@ -168,6 +171,40 @@ pub fn install_deny_wait_blocking(action: DenyAction) -> Result<(), SeccompError
         stmt(BPF_LD_ABS_W, SECCOMP_DATA_NR_OFF),
         jump(BPF_JEQ_K, libc::SYS_wait4 as u32, 0, 3),
         stmt(BPF_LD_ABS_W, SECCOMP_DATA_ARG2_OFF),
+        jump(BPF_JEQ_K, 0, 0, 1),
+        stmt(BPF_RET_K, deny),
+        stmt(BPF_RET_K, SECCOMP_RET_ALLOW),
+    ];
+    install_program(&program)
+}
+
+/// XRV1-L132: deny only BLOCKING `waitid` (options
+/// WITHOUT `WNOHANG`) with the action errno while
+/// the `WNOHANG` form stays allowed. Unlike `wait4`
+/// (whose blocking set is exactly options==0), the
+/// blocking `waitid` carries nonzero flags (e.g.
+/// `WEXITED` alone) — so the filter bit-tests the
+/// options LOW word (args[3], a u64 at offset 40)
+/// for `WNOHANG` instead of comparing against zero.
+/// Bit-clear ⟹ deny; bit-set ⟹ allow. Only the low
+/// word is tested (all real wait flags live there;
+/// the high word carries 32-bit-arg garbage). Same
+/// confined-helper contract as [`install_deny_one`].
+#[cfg(target_arch = "x86_64")]
+pub fn install_deny_waitid_blocking(action: DenyAction) -> Result<(), SeccompError> {
+    let deny = action.ret();
+    // waitid(idtype, id, infop, options): options is
+    // args[3], a u64 at offset 40; the low word is
+    // bit-tested for WNOHANG.
+    const SECCOMP_DATA_ARG3_OFF: u32 = 40;
+    let program = [
+        stmt(BPF_LD_ABS_W, SECCOMP_DATA_ARCH_OFF),
+        jump(BPF_JEQ_K, AUDIT_ARCH_X86_64, 1, 0),
+        stmt(BPF_RET_K, SECCOMP_RET_ERRNO | libc::ENOSYS as u32),
+        stmt(BPF_LD_ABS_W, SECCOMP_DATA_NR_OFF),
+        jump(BPF_JEQ_K, libc::SYS_waitid as u32, 0, 4),
+        stmt(BPF_LD_ABS_W, SECCOMP_DATA_ARG3_OFF),
+        stmt(BPF_ALU_AND_K, libc::WNOHANG as u32),
         jump(BPF_JEQ_K, 0, 0, 1),
         stmt(BPF_RET_K, deny),
         stmt(BPF_RET_K, SECCOMP_RET_ALLOW),
@@ -282,6 +319,15 @@ pub fn install_deny_kill_negative_pid(_action: DenyAction) -> Result<(), Seccomp
 /// Non-x86_64 builds refuse without touching process state.
 #[cfg(not(target_arch = "x86_64"))]
 pub fn install_deny_wait_blocking(_action: DenyAction) -> Result<(), SeccompError> {
+    Err(SeccompError {
+        stage: "unsupported_arch",
+        errno: libc::ENOSYS,
+    })
+}
+
+/// Non-x86_64 builds refuse without touching process state.
+#[cfg(not(target_arch = "x86_64"))]
+pub fn install_deny_waitid_blocking(_action: DenyAction) -> Result<(), SeccompError> {
     Err(SeccompError {
         stage: "unsupported_arch",
         errno: libc::ENOSYS,

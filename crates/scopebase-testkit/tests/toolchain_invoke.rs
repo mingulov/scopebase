@@ -19964,8 +19964,11 @@ fn repeated_holder_cleanup_spares_recycled_number() {
     // concurrently in another process).
     let _nsflock = ns_last_pid_flock();
     for _ in 0..100 {
+        // (The writability gate above passed — a steer
+        // failure here is transient (retry it); only
+        // placement exhaustion skips (below).)
         if !steer_next_pid_unlocked(holder) {
-            break;
+            continue;
         }
         let mut cand = std::process::Command::new("sleep")
             .arg("890")
@@ -19995,7 +19998,20 @@ fn repeated_holder_cleanup_spares_recycled_number() {
     // BEFORE any locked_* call below (same-process POSIX locks
     // merge: a nested locked_* drop would release this guard).
     drop(_nsflock);
-    let mut replacement = replacement.expect("replacement placed on holder's number");
+    // Retake-contention: unplaceable (a sibling fork took the
+    // freed number first — every later attempt then misses
+    // deterministically) ⟹ loud skip (the 1945/2062/10981
+    // precedent — never fail an unexercised subject). The
+    // hint restores first (R13-009: the flock above is
+    // released, so the locked call is safe).
+    let mut replacement = match replacement {
+        Some(replacement) => replacement,
+        None => {
+            locked_restore_hint(&last_before);
+            eprintln!("skip: holder number retake contended (suite churn took it)");
+            return;
+        }
+    };
     // R12-004: the repeated cleanup, tick-gated (the
     // holder's number now names a live replacement).
     let err: std::thread::Result<(i32, u64)> =
@@ -20128,8 +20144,11 @@ fn repeated_probe_retirement_spares_recycled_number() {
         // R12-005: cross-process placement lock.
         let _nsflock = ns_last_pid_flock();
         for _ in 0..100 {
+            // (The writability gate above passed — a steer
+            // failure here is transient (retry it); only
+            // placement exhaustion skips (below).)
             if !steer_next_pid_unlocked(id) {
-                break;
+                continue;
             }
             let mut cand = std::process::Command::new("/bin/sleep")
                 .arg("892")
@@ -20156,7 +20175,21 @@ fn repeated_probe_retirement_spares_recycled_number() {
             break;
         }
     }
-    let mut replacement = replacement.expect("replacement placed on probe's number");
+    // Retake-contention: unplaceable (a sibling fork took the
+    // freed number first — every later attempt then misses
+    // deterministically (ROUND-14 LESSON)) ⟹ loud skip (the
+    // 1945/2062/10981 precedent — never fail an unexercised
+    // subject). The hint restores first (the placement
+    // block above released its flock, so the locked call
+    // is safe).
+    let mut replacement = match replacement {
+        Some(replacement) => replacement,
+        None => {
+            locked_restore_hint(&last_before);
+            eprintln!("skip: probe number retake contended (suite churn took it)");
+            return;
+        }
+    };
     let revived_tick = task_starttime_checked(id)
         .expect("replacement stat readable")
         .expect("replacement visible");
