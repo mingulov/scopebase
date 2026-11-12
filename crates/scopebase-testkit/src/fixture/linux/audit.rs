@@ -62107,17 +62107,20 @@ time.sleep(30)
             Some(rhs)
         }
         // L178: the forwarded value of
-        // `X.clone()/to_owned()/borrow()` /
-        // UFCS (optional turbofish either
-        // side; L195 clone/borrow/convert
-        // full paths + From; L196 absolute
-        // `::`). None ⟹ not a whole-piece
-        // forward. HUP-CENSUS-SELF.
+        // `X.clone()/to_owned()/borrow()/
+        // as_ref()` / UFCS (optional
+        // turbofish either side; L195
+        // clone/borrow/convert full paths
+        // + From; L196 absolute `::`;
+        // L198 qualified `<T as Trait>`;
+        // L199 as_ref). None ⟹ not a
+        // whole-piece forward.
+        // HUP-CENSUS-SELF.
         fn forward_receiver(t: &str) -> Option<&str> {
             let t = t.trim();
             // Method form: last forward-call.
             let mut hit: Option<(usize, usize)> = None;
-            for meth in [".clone", ".to_owned", ".borrow"] {
+            for meth in [".clone", ".to_owned", ".borrow", ".as_ref"] {
                 if let Some(q) = t.rfind(meth) {
                     if hit.map_or(true, |(hq, _)| q > hq) {
                         hit = Some((q, meth.len()));
@@ -62147,7 +62150,9 @@ time.sleep(30)
             }
             // UFCS form (L195 core/borrow/
             // convert paths; L196 absolute
-            // `::` strips first).
+            // `::` strips first; L198
+            // qualified `<T as Trait>`, trait
+            // + method both table-gated).
             let mut u = t.strip_prefix("::").unwrap_or(t);
             for p in [
                 "std::clone::",
@@ -62162,20 +62167,40 @@ time.sleep(30)
                     break;
                 }
             }
-            let mut hit = None;
-            for (ty, me) in [
+            let table = [
                 ("Clone", "clone"),
                 ("ToOwned", "to_owned"),
                 ("Borrow", "borrow"),
+                ("AsRef", "as_ref"),
                 ("From", "from"),
-            ] {
-                if let Some(r) = u.strip_prefix(ty) {
-                    let r = r.trim_start();
-                    if let Some(m) = r.strip_prefix("::") {
-                        let m = m.trim_start();
-                        if let Some(after) = m.strip_prefix(me) {
-                            hit = Some(after);
+            ];
+            let mut hit = None;
+            if u.trim_start().starts_with('<') {
+                let uu = u.trim_start();
+                let raw = skip_angle_brackets(uu)?;
+                let after = raw.trim_start();
+                let m = after.strip_prefix("::")?.trim_start();
+                let inner = &uu[1..uu.len() - raw.len() - 1];
+                let tr = inner.rsplit(" as ").next()?.trim();
+                let tr = tr.rsplit("::").next()?.trim();
+                for (ty, me) in table {
+                    if tr == ty {
+                        if let Some(a) = m.strip_prefix(me) {
+                            hit = Some(a);
                             break;
+                        }
+                    }
+                }
+            } else {
+                for (ty, me) in table {
+                    if let Some(r) = u.strip_prefix(ty) {
+                        let r = r.trim_start();
+                        if let Some(m) = r.strip_prefix("::") {
+                            let m = m.trim_start();
+                            if let Some(after) = m.strip_prefix(me) {
+                                hit = Some(after);
+                                break;
+                            }
                         }
                     }
                 }
@@ -62398,8 +62423,11 @@ time.sleep(30)
         // `{Box,Arc,Rc}::{new,pin,from}`
         // (L175/L194/L197 — optional
         // `::<T>`; boxed/sync/rc full
-        // paths; absolute `::` too).
-        // None ⟹ not one. HUP-CENSUS-SELF.
+        // paths; absolute `::` too) plus
+        // `{Arc,Rc}::new_cyclic` (L200 —
+        // the wrapped value is the
+        // closure-arg BODY). None ⟹ not
+        // one. HUP-CENSUS-SELF.
         fn wrapper_inner_arg(s: &str) -> Option<&str> {
             let wordish =
                 |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
@@ -62417,9 +62445,9 @@ time.sleep(30)
                     break;
                 }
             }
-            let r = ["Box", "Arc", "Rc"]
+            let (wrap, r) = ["Box", "Arc", "Rc"]
                 .iter()
-                .find_map(|w| s.strip_prefix(w))?;
+                .find_map(|w| s.strip_prefix(w).map(|r| (*w, r)))?;
             if wordish(r.chars().next()) {
                 return None;
             }
@@ -62433,7 +62461,11 @@ time.sleep(30)
                 return None;
             }
             let m = rest.strip_prefix("::")?;
-            let meth = if m.starts_with("new") {
+            // `new_cyclic` before `new`
+            // (prefix shadow).
+            let meth = if m.starts_with("new_cyclic") {
+                "new_cyclic"
+            } else if m.starts_with("new") {
                 "new"
             } else if m.starts_with("pin") {
                 "pin"
@@ -62454,7 +62486,34 @@ time.sleep(30)
                 } else if c == ')' {
                     parens -= 1;
                     if parens == 0 {
-                        return Some(&arg[..idx]);
+                        let found = &arg[..idx];
+                        if meth != "new_cyclic" {
+                            return Some(found);
+                        }
+                        // L200: `new_cyclic`
+                        // (Arc/Rc only) wraps
+                        // the closure BODY.
+                        if wrap == "Box" {
+                            return None;
+                        }
+                        let mut b = found.trim();
+                        if let Some(r) = b.strip_prefix("move") {
+                            if wordish(r.chars().next()) {
+                                return None;
+                            }
+                            b = r.trim_start();
+                        }
+                        let b = b.strip_prefix('|')?;
+                        let bar = b.find('|')?;
+                        let mut body = b[bar + 1..].trim();
+                        // Block bodies: the
+                        // tail piece (`break` /
+                        // `return` exits stay
+                        // residual).
+                        if let Some(inn) = block_inner_of(body) {
+                            body = value_pieces(inn).into_iter().next()?;
+                        }
+                        return Some(body);
                     }
                 }
             }
