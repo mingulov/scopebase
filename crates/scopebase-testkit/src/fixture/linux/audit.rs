@@ -62108,19 +62108,33 @@ time.sleep(30)
         }
         // L178: the forwarded value of
         // `X.clone()/to_owned()/borrow()/
-        // as_ref()` / UFCS (optional
-        // turbofish either side; L195
-        // clone/borrow/convert full paths
-        // + From; L196 absolute `::`;
-        // L198 qualified `<T as Trait>`;
-        // L199 as_ref). None ⟹ not a
+        // as_ref()/into()/deref()` /
+        // UFCS (optional turbofish either
+        // side; L195 clone/borrow/convert
+        // full paths + From; L196 absolute
+        // `::`; L198 qualified `<T as
+        // Trait>`; L199 as_ref; L203 into;
+        // L204 deref/deref_mut; L205 trait
+        // turbofish). None ⟹ not a
         // whole-piece forward.
         // HUP-CENSUS-SELF.
         fn forward_receiver(t: &str) -> Option<&str> {
             let t = t.trim();
-            // Method form: last forward-call.
+            // Method form: last forward-call
+            // (longest-prefix first: ties
+            // keep the earlier entry, so
+            // `.deref_mut` precedes
+            // `.deref`).
             let mut hit: Option<(usize, usize)> = None;
-            for meth in [".clone", ".to_owned", ".borrow", ".as_ref"] {
+            for meth in [
+                ".clone",
+                ".to_owned",
+                ".borrow",
+                ".as_ref",
+                ".into",
+                ".deref_mut",
+                ".deref",
+            ] {
                 if let Some(q) = t.rfind(meth) {
                     if hit.map_or(true, |(hq, _)| q > hq) {
                         hit = Some((q, meth.len()));
@@ -62161,6 +62175,8 @@ time.sleep(30)
                 "core::borrow::",
                 "std::convert::",
                 "core::convert::",
+                "std::ops::",
+                "core::ops::",
             ] {
                 if let Some(r) = u.strip_prefix(p) {
                     u = r;
@@ -62173,6 +62189,9 @@ time.sleep(30)
                 ("Borrow", "borrow"),
                 ("AsRef", "as_ref"),
                 ("From", "from"),
+                ("Into", "into"),
+                ("Deref", "deref"),
+                ("DerefMut", "deref_mut"),
             ];
             let mut hit = None;
             if u.trim_start().starts_with('<') {
@@ -62183,6 +62202,9 @@ time.sleep(30)
                 let inner = &uu[1..uu.len() - raw.len() - 1];
                 let tr = inner.rsplit(" as ").next()?.trim();
                 let tr = tr.rsplit("::").next()?.trim();
+                // L205: cut trait generics
+                // (`Borrow<_>` ⟹ `Borrow`).
+                let tr = tr.split('<').next()?.trim();
                 for (ty, me) in table {
                     if tr == ty {
                         if let Some(a) = m.strip_prefix(me) {
@@ -62196,7 +62218,13 @@ time.sleep(30)
                     if let Some(r) = u.strip_prefix(ty) {
                         let r = r.trim_start();
                         if let Some(m) = r.strip_prefix("::") {
-                            let m = m.trim_start();
+                            let mut m = m.trim_start();
+                            // L205: trait turbofish
+                            // (`Borrow::<T>::borrow`).
+                            if m.starts_with('<') {
+                                m = skip_angle_brackets(m)?.trim_start();
+                                m = m.strip_prefix("::")?.trim_start();
+                            }
                             if let Some(after) = m.strip_prefix(me) {
                                 hit = Some(after);
                                 break;
@@ -62314,7 +62342,10 @@ time.sleep(30)
         }
         // Strip forward-wraps: leading
         // `&`/`*`/`mut`/space chains plus
-        // whole-piece grouping parens.
+        // whole-piece grouping parens plus
+        // closure headers (L201/L202 — a
+        // closure forwards its body's
+        // value: invocation yields it).
         // None ⟹ past 32 strips (caller
         // goes loud). HUP-CENSUS-SELF.
         fn strip_forward_wraps(mut t: &str) -> Option<&str> {
@@ -62335,6 +62366,10 @@ time.sleep(30)
                 };
                 if s.len() != t.len() {
                     t = s;
+                    continue;
+                }
+                if let Some(body) = closure_body_of(s) {
+                    t = body.trim();
                     continue;
                 }
                 if s.starts_with('(') && paren_closed_at_end(s) {
@@ -62382,16 +62417,19 @@ time.sleep(30)
                 let Some(rhs) = block_inner_let_rhs(inner, t) else {
                     return false;
                 };
-                // L184: clone-chains unwrap
-                // before the closure/lone
-                // tests (L186 past-cap loud).
+                // Closure test on the RAW rhs
+                // (L201/L202: peel strips
+                // closure headers now);
+                // L184 clone-chains unwrap
+                // before the lone-hop test
+                // (L186 past-cap loud).
+                if closure_at_start_depth(rhs, depth + 1, all) {
+                    return true;
+                }
                 let rhs = match peel_value_core(rhs.trim()) {
                     None => return true,
                     Some(u) => u,
                 };
-                if closure_at_start_depth(rhs, depth + 1, all) {
-                    return true;
-                }
                 if !lone(rhs) {
                     return false;
                 }
@@ -62419,6 +62457,32 @@ time.sleep(30)
             }
             None
         }
+        // Body text after a closure's
+        // params (`move` + `|...|`
+        // stripped; L201/L202). None ⟹
+        // not closure-led.
+        // HUP-CENSUS-SELF.
+        fn closure_body_of(arg: &str) -> Option<&str> {
+            let mut b = arg.trim();
+            if let Some(r) = b.strip_prefix("move") {
+                let c = r.chars().next();
+                if c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_') {
+                    return None;
+                }
+                b = r.trim_start();
+            }
+            let b = b.strip_prefix('|')?;
+            let bar = b.find('|')?;
+            let mut body = b[bar + 1..].trim();
+            if body.starts_with("->") {
+                // Explicit return type
+                // (block bodies only):
+                // cut to the `{`.
+                let cut = body.find('{')?;
+                body = body[cut..].trim();
+            }
+            Some(body)
+        }
         // Arg-inner of callable wrappers:
         // `{Box,Arc,Rc}::{new,pin,from}`
         // (L175/L194/L197 — optional
@@ -62426,8 +62490,10 @@ time.sleep(30)
         // paths; absolute `::` too) plus
         // `{Arc,Rc}::new_cyclic` (L200 —
         // the wrapped value is the
-        // closure-arg BODY). None ⟹ not
-        // one. HUP-CENSUS-SELF.
+        // factory RETURN: inline body,
+        // single-exit fallback (L201), or
+        // lone factory name (L202)). None
+        // ⟹ not one. HUP-CENSUS-SELF.
         fn wrapper_inner_arg(s: &str) -> Option<&str> {
             let wordish =
                 |c: Option<char>| c.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
@@ -62492,28 +62558,57 @@ time.sleep(30)
                         }
                         // L200: `new_cyclic`
                         // (Arc/Rc only) wraps
-                        // the closure BODY.
+                        // the factory RETURN:
+                        // an inline-closure
+                        // body, or a lone
+                        // factory name
+                        // resolved downstream
+                        // (L202;
+                        // recording-gated).
                         if wrap == "Box" {
                             return None;
                         }
-                        let mut b = found.trim();
-                        if let Some(r) = b.strip_prefix("move") {
-                            if wordish(r.chars().next()) {
-                                return None;
+                        if let Some(body) = closure_body_of(found) {
+                            let body = body.trim();
+                            match block_inner_of(body) {
+                                None => return Some(body),
+                                Some(inn) => {
+                                    let pcs = value_pieces(inn);
+                                    let tail = pcs[0].trim();
+                                    if !tail.is_empty() {
+                                        return Some(tail);
+                                    }
+                                    // L201: empty tail
+                                    // + exactly one
+                                    // exit value ⟹ it
+                                    // (multi-exit stays
+                                    // residual).
+                                    let exits: Vec<&str> = pcs[1..]
+                                        .iter()
+                                        .map(|q| q.trim())
+                                        .filter(|q| !q.is_empty())
+                                        .collect();
+                                    if exits.len() == 1 {
+                                        return Some(exits[0]);
+                                    }
+                                    return None;
+                                }
                             }
-                            b = r.trim_start();
                         }
-                        let b = b.strip_prefix('|')?;
-                        let bar = b.find('|')?;
-                        let mut body = b[bar + 1..].trim();
-                        // Block bodies: the
-                        // tail piece (`break` /
-                        // `return` exits stay
-                        // residual).
-                        if let Some(inn) = block_inner_of(body) {
-                            body = value_pieces(inn).into_iter().next()?;
-                        }
-                        return Some(body);
+                        // L202: factory by name
+                        // (or a forward chain
+                        // to one) — peel to
+                        // the lone name.
+                        return match peel_value_core(found.trim()) {
+                            Some(u)
+                                if !u.is_empty()
+                                    && u.bytes()
+                                        .all(|b| b.is_ascii_alphanumeric() || b == b'_') =>
+                            {
+                                Some(u)
+                            }
+                            _ => None,
+                        };
                     }
                 }
             }
@@ -62609,11 +62704,15 @@ time.sleep(30)
                 return closure_at_start_depth(inner, depth + 1, all) || {
                     // Wrapped forward of a
                     // recorded name (same
-                    // L177 rationale).
+                    // L177 rationale), or a
+                    // call to one (L201c exit
+                    // `mk()`; callee-gated
+                    // like recorded_call_in).
                     let t = inner.trim();
-                    !t.is_empty()
-                        && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-                        && all.iter().any(|a| a.as_str() == t)
+                    let head = t.split('(').next().unwrap_or("").trim();
+                    !head.is_empty()
+                        && head.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                        && all.iter().any(|a| a.as_str() == head)
                 };
             }
             false
@@ -63664,13 +63763,16 @@ time.sleep(30)
                 // clone/ref/paren-forward of
                 // an always-name stays
                 // always (L186 past-cap is
-                // loud).
+                // loud). L201c: a call to
+                // one (`mk()`) carries its
+                // taint too (callee-gated).
                 match peel_value_core(p.trim()) {
                     None => return true,
                     Some(u) => {
-                        if !u.is_empty()
-                            && u.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-                            && caps.iter().any(|a| a.as_str() == u)
+                        let head = u.split('(').next().unwrap_or("").trim();
+                        if !head.is_empty()
+                            && head.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                            && caps.iter().any(|a| a.as_str() == head)
                         {
                             return true;
                         }
